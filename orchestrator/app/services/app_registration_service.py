@@ -283,25 +283,35 @@ def grant_agent_graph_permissions(
     graph_sp_object_id = sp_lookup.json()["value"][0]["id"]
 
     for permission_name, app_role_id in AGENT_GRAPH_APP_ROLE_IDS.items():
-        resp = httpx.post(
-            f"{GRAPH_BASE}/servicePrincipals/{agent_service_principal_id}/appRoleAssignments",
-            headers=headers,
-            json={
-                "principalId": agent_service_principal_id,
-                "resourceId": graph_sp_object_id,
-                "appRoleId": app_role_id,
-            },
-            timeout=30,
-        )
-        if resp.status_code in (200, 201):
-            logger.info("Granted Graph app permission %s to agent SP %s", permission_name, agent_service_principal_id)
-        elif resp.status_code == 400 and "already exists" in resp.text.lower():
-            logger.info("Graph app permission %s already granted to agent SP %s, skipping", permission_name, agent_service_principal_id)
-        else:
-            raise AppRegistrationError(
-                f"Failed to grant Graph app permission {permission_name} to agent SP "
-                f"{agent_service_principal_id}: {resp.status_code} {resp.text}"
+        resp = None
+        for attempt in range(5):
+            resp = httpx.post(
+                f"{GRAPH_BASE}/servicePrincipals/{agent_service_principal_id}/appRoleAssignments",
+                headers=headers,
+                json={
+                    "principalId": agent_service_principal_id,
+                    "resourceId": graph_sp_object_id,
+                    "appRoleId": app_role_id,
+                },
+                timeout=30,
             )
+            if resp.status_code in (200, 201):
+                logger.info("Granted Graph app permission %s to agent SP %s", permission_name, agent_service_principal_id)
+                break
+            if resp.status_code == 400 and "already exists" in resp.text.lower():
+                logger.info("Graph app permission %s already granted to agent SP %s, skipping", permission_name, agent_service_principal_id)
+                break
+            if resp.status_code in (400, 404) and attempt < 4:
+                logger.info(
+                    "Agent SP %s or Graph role not yet replicated in Entra ID for %s, retrying in 2s... (attempt %d/5)",
+                    agent_service_principal_id, permission_name, attempt + 1
+                )
+                time.sleep(2)
+            else:
+                raise AppRegistrationError(
+                    f"Failed to grant Graph app permission {permission_name} to agent SP "
+                    f"{agent_service_principal_id}: {resp.status_code} {resp.text}"
+                )
 
 
 def grant_sharepoint_site_permission(
@@ -322,26 +332,38 @@ def grant_sharepoint_site_permission(
     token = _graph_token(deployment_spn_client_id, deployment_spn_secret, customer_tenant_id)
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-    resp = httpx.post(
-        f"{GRAPH_BASE}/sites/{site_id}/permissions",
-        headers=headers,
-        json={
-            "roles": ["write"],
-            "grantedToIdentities": [
-                {
-                    "application": {
-                        "id": agent_app_client_id,
-                        "displayName": f"skysecure-agent-{agent_app_client_id}",
+    resp = None
+    for attempt in range(5):
+        resp = httpx.post(
+            f"{GRAPH_BASE}/sites/{site_id}/permissions",
+            headers=headers,
+            json={
+                "roles": ["write"],
+                "grantedToIdentities": [
+                    {
+                        "application": {
+                            "id": agent_app_client_id,
+                            "displayName": f"skysecure-agent-{agent_app_client_id}",
+                        }
                     }
-                }
-            ],
-        },
-        timeout=30,
-    )
-    if resp.status_code not in (200, 201):
+                ],
+            },
+            timeout=30,
+        )
+        if resp.status_code in (200, 201):
+            break
+        if resp.status_code in (400, 404) and attempt < 4:
+            logger.info("Agent app %s not yet replicated for SharePoint site permission grant, retrying in 2s... (attempt %d/5)", agent_app_client_id, attempt + 1)
+            time.sleep(2)
+        else:
+            break
+
+    if resp is None or resp.status_code not in (200, 201):
+        err_text = resp.text if resp is not None else "No response"
+        err_code = resp.status_code if resp is not None else 500
         raise AppRegistrationError(
             f"Failed to grant site permission to agent app {agent_app_client_id} on site {site_id}: "
-            f"{resp.status_code} {resp.text}"
+            f"{err_code} {err_text}"
         )
     logger.info("Granted site permission on %s to agent app %s", site_id, agent_app_client_id)
 

@@ -85,10 +85,11 @@ def import_image_to_customer_acr(
     source_acr_subscription_id = source_acr_subscription_id or customer_subscription_id
     source_acr_resource_group = source_acr_resource_group or customer_resource_group
 
-    # Authenticate against customer_tenant_id (or deployment_spn_tenant_id fallback)
-    target_tenant_id = customer_tenant_id or deployment_spn_tenant_id
+    # For Azure Lighthouse cross-tenant ARM operations (creating/importing customer ACR),
+    # we MUST authenticate against Skysecure's home tenant (deployment_spn_tenant_id) where
+    # the Lighthouse cross-tenant delegation was granted.
     customer_credential = ClientSecretCredential(
-        tenant_id=target_tenant_id,
+        tenant_id=deployment_spn_tenant_id,
         client_id=deployment_spn_client_id,
         client_secret=deployment_spn_secret,
         additionally_allowed_tenants=["*"],

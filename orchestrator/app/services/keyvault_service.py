@@ -73,7 +73,7 @@ def store_agent_secret_in_customer_keyvault(
     agent_app_client_secret: str,
 ) -> KeyVaultResult:
     credential = ClientSecretCredential(
-        tenant_id=customer_tenant_id or deployment_spn_tenant_id,
+        tenant_id=deployment_spn_tenant_id,
         client_id=deployment_spn_client_id,
         client_secret=deployment_spn_secret,
         additionally_allowed_tenants=["*"],
@@ -281,7 +281,7 @@ def grant_secrets_user_role(
     from azure.mgmt.keyvault.models import VaultAccessPolicyParameters, VaultAccessPolicyProperties  # type: ignore
 
     credential = ClientSecretCredential(
-        tenant_id=customer_tenant_id or deployment_spn_tenant_id,
+        tenant_id=deployment_spn_tenant_id,
         client_id=deployment_spn_client_id,
         client_secret=deployment_spn_secret,
         additionally_allowed_tenants=["*"],
