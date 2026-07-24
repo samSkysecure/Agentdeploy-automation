@@ -61,8 +61,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const resolvedTenantIdText = document.getElementById("resolved-tenant-id-text");
     const subscriptionSelect = document.getElementById("subscriptionSelect");
     const assignRoleSubscriptionIdInput = document.getElementById("assignRoleSubscriptionId");
+    const subRefreshStatus = document.getElementById("sub-refresh-status");
 
-    async function resolveTenantAndSubscriptions() {
+    // ---------------------------------------------------------------------
+    // Step 2: Tenant resolution (no longer auto-fetches subscriptions)
+    // Subscriptions are now loaded manually via "Refresh" in Step 4 — after
+    // Lighthouse delegation has been completed in Step 3.
+    // ---------------------------------------------------------------------
+    async function resolveTenant() {
         const query = tenantIdInput.value.trim();
         if (!query) {
             resolvedTenantId = null;
@@ -79,7 +85,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (resolvedTenantIdText) resolvedTenantIdText.textContent = resolvedTenantId;
                 if (tenantResolvedBadge) tenantResolvedBadge.classList.remove("hidden");
                 updateConsentLink();
-                fetchSubscriptions(resolvedTenantId);
+                // NOTE: subscriptions are NOT auto-fetched here anymore.
+                // The user must complete Lighthouse (Step 3) first, then click
+                // "Refresh Subscriptions" (Step 4) to populate the dropdown.
             } else {
                 resolvedTenantId = null;
                 if (tenantResolvedBadge) tenantResolvedBadge.classList.add("hidden");
@@ -94,30 +102,72 @@ document.addEventListener("DOMContentLoaded", () => {
 
     tenantIdInput.addEventListener("input", () => {
         clearTimeout(resolveTimer);
-        resolveTimer = setTimeout(resolveTenantAndSubscriptions, 350);
+        resolveTimer = setTimeout(resolveTenant, 350);
     });
 
-    async function fetchSubscriptions(tenantId) {
+    // ---------------------------------------------------------------------
+    // Step 4: Subscription fetch — MANUAL via "Refresh" button.
+    // Called only after the user has completed Lighthouse delegation (Step 3).
+    // The /subscriptions endpoint now authenticates from Skysecure's managing
+    // tenant, so subscriptions appear only after Lighthouse delegation grants
+    // cross-tenant ARM access from Skysecure's side.
+    // ---------------------------------------------------------------------
+    async function fetchSubscriptions() {
+        const tenantId = resolvedTenantId || tenantIdInput.value.trim();
+        if (!tenantId) {
+            setSubRefreshStatus("Enter your work email/domain in Step 2 first.", "error");
+            return;
+        }
+
         if (!subscriptionSelect) return;
+
         subscriptionSelect.innerHTML = `<option value="">-- Discovering Subscriptions... --</option>`;
+        setSubRefreshStatus("Contacting Azure Lighthouse delegation...", "info");
+
+        const btnRefresh = document.getElementById("btn-refresh-subs");
+        if (btnRefresh) { btnRefresh.disabled = true; btnRefresh.textContent = "Refreshing..."; }
+
         try {
             const res = await fetch(`/api/azure/subscriptions?tenant_id=${tenantId}`);
             if (res.ok) {
                 const subs = await res.json();
                 if (subs && subs.length > 0) {
-                    subscriptionSelect.innerHTML = `<option value="">-- Select a subscription --</option>` + subs.map(s => 
+                    subscriptionSelect.innerHTML = `<option value="">-- Select a subscription --</option>` + subs.map(s =>
                         `<option value="${s.subscriptionId}">${s.displayName || s.subscriptionId} (${s.subscriptionId.substring(0, 8)}...)</option>`
                     ).join("");
                     assignRoleSubscriptionIdInput.value = "";
+                    setSubRefreshStatus(`✓ Found ${subs.length} subscription(s). Select one below.`, "success");
                 } else {
                     subscriptionSelect.innerHTML = `<option value="">-- No subscriptions found --</option>`;
+                    setSubRefreshStatus("No subscriptions found. Make sure Lighthouse delegation (Step 3) completed successfully.", "warn");
                 }
             } else {
-                subscriptionSelect.innerHTML = `<option value="">-- Complete Admin Consent (Step 2) first --</option>`;
+                const errorData = await res.json().catch(() => ({}));
+                subscriptionSelect.innerHTML = `<option value="">-- Lighthouse delegation not yet complete --</option>`;
+                setSubRefreshStatus(
+                    errorData.detail || "Lighthouse delegation not yet detected. Complete Step 3, wait ~30s, then refresh.",
+                    "error"
+                );
             }
         } catch (err) {
-            subscriptionSelect.innerHTML = `<option value="">-- Complete Admin Consent (Step 2) first --</option>`;
+            subscriptionSelect.innerHTML = `<option value="">-- Error fetching subscriptions --</option>`;
+            setSubRefreshStatus(`Error: ${err.message}`, "error");
+        } finally {
+            if (btnRefresh) { btnRefresh.disabled = false; btnRefresh.textContent = "Refresh"; }
         }
+    }
+
+    function setSubRefreshStatus(msg, type) {
+        if (!subRefreshStatus) return;
+        subRefreshStatus.textContent = msg;
+        subRefreshStatus.className = `form-alert ${type}`;
+        subRefreshStatus.classList.remove("hidden");
+    }
+
+    // Wire up the Refresh Subscriptions button (Step 4)
+    const btnRefreshSubs = document.getElementById("btn-refresh-subs");
+    if (btnRefreshSubs) {
+        btnRefreshSubs.addEventListener("click", fetchSubscriptions);
     }
 
     if (subscriptionSelect) {
@@ -149,7 +199,11 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // ---------------------------------------------------------------------
-    // Step 3: Assign Role button
+    // Step 3: Lighthouse Delegation button — no subscription ID required.
+    // The Lighthouse ARM template is deployed via the Azure portal "Deploy to
+    // Azure" link. The customer selects their subscription IN the portal when
+    // the template deploys — we do not need to know it beforehand.
+    // After the portal deployment is done, the user clicks "Refresh" in Step 4.
     // ---------------------------------------------------------------------
     const btnAssignRole = document.getElementById("btn-assign-role");
     const assignRoleAlert = document.getElementById("assign-role-alert");
@@ -165,15 +219,21 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     btnAssignRole.addEventListener("click", async () => {
-        const subId = assignRoleSubscriptionIdInput.value.trim() || (subscriptionSelect ? subscriptionSelect.value : "");
-        if (!subId) {
-            showAssignRoleAlert("No subscription selected yet. Complete Step 2 first.", "error");
-            return;
-        }
+        // Use a placeholder subscription ID since the ARM template is scoped
+        // at subscription level but the CUSTOMER picks the subscription when
+        // they open the portal — we just need any valid URL format.
+        // The backend assign-role-link endpoint builds the portal URL; we pass
+        // a sentinel value to indicate "no sub yet" and let the backend return
+        // the subscription-agnostic portal deployment URL.
+        const subId = assignRoleSubscriptionIdInput.value.trim() || subscriptionSelect?.value || "pending";
+
         btnAssignRole.disabled = true;
-        showAssignRoleAlert("Fetching role assignment link...", "info");
+        showAssignRoleAlert("Opening Azure Portal for Lighthouse delegation...", "info");
         try {
-            const res = await fetch(`/api/azure/assign-role-link?subscription_id=${subId}`);
+            // Use subId if already selected, otherwise use 'pending' sentinel.
+            // The portal deployment URL works regardless — customer picks subscription there.
+            const querySubId = (subId && subId !== "pending") ? subId : "00000000-0000-0000-0000-000000000000";
+            const res = await fetch(`/api/azure/assign-role-link?subscription_id=${querySubId}`);
             if (!res.ok) {
                 const errorData = await res.json().catch(() => ({}));
                 throw new Error(errorData.detail || "Failed to build the role assignment link.");
@@ -183,7 +243,10 @@ document.addEventListener("DOMContentLoaded", () => {
             assignRoleInstructions.textContent = data.instructions;
             assignRoleCliSpan.textContent = data.powershellFallback;
             assignRoleCliBox.classList.remove("hidden");
-            showAssignRoleAlert("Portal opened in a new tab. Complete the role assignment there, or use the PowerShell fallback below.", "info");
+            showAssignRoleAlert(
+                "Azure Portal opened in a new tab. Select your subscription in the portal, review the template parameters, then click Create. Once complete, return here and click 'Refresh' in Step 4.",
+                "info"
+            );
         } catch (err) {
             showAssignRoleAlert(err.message, "error");
         } finally {
@@ -203,7 +266,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // ---------------------------------------------------------------------
-    // Step 4: Resource Group selection & Deployment
+    // Step 5: Resource Group selection & Deployment
     // ---------------------------------------------------------------------
     const resourceGroupSelect = document.getElementById("resourceGroupSelect");
     const newResourceGroupInput = document.getElementById("newResourceGroupInput");
@@ -222,10 +285,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     async function fetchResourceGroups() {
-        const tenantId = tenantIdInput.value.trim();
-        const subId = assignRoleSubscriptionIdInput.value.trim();
+        const tenantId = resolvedTenantId || tenantIdInput.value.trim();
+        const subId = assignRoleSubscriptionIdInput.value.trim() || (subscriptionSelect ? subscriptionSelect.value : "");
         if (!tenantId || !subId) {
-            alert("Please enter Tenant ID (Step 2) and Subscription ID (Step 3) first.");
+            alert("Please complete Steps 2–4 first (resolve tenant, complete Lighthouse, and select a subscription).");
             return;
         }
         btnFetchRgs.disabled = true;
@@ -234,7 +297,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const res = await fetch(`/api/azure/resource-groups?tenant_id=${tenantId}&subscription_id=${subId}`);
             if (!res.ok) {
                 const errorData = await res.json().catch(() => ({}));
-                throw new Error(errorData.detail || "Could not fetch resource groups. Ensure 'Assign Role' step has been completed.");
+                throw new Error(errorData.detail || "Could not fetch resource groups. Ensure Lighthouse delegation (Step 3) has been completed.");
             }
             const rgs = await res.json();
             resourceGroupSelect.innerHTML = '<option value="__NEW__">+ Create New Resource Group</option>';
@@ -258,7 +321,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // ---------------------------------------------------------------------
-    // Step 4: Power Platform Environment ID - manual entry only.
+    // Step 5: Power Platform Environment ID - manual entry only.
     // (Pre-deployment auto-discovery via device code removed; the mid-
     // deployment device-code popup further below, driven by
     // record.status === "awaiting_user_device_auth", is unchanged and is
@@ -282,7 +345,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         const subscriptionId = assignRoleSubscriptionIdInput.value.trim() || (subscriptionSelect ? subscriptionSelect.value : "");
         if (!subscriptionId) {
-            appendLog("Subscription ID is required (Step 3). Complete Step 2 first to discover subscriptions.", "error");
+            appendLog("Subscription ID is required (Step 4). Complete Lighthouse delegation (Step 3) and refresh subscriptions.", "error");
             resetUI();
             return;
         }

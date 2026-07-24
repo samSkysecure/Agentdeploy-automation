@@ -146,33 +146,49 @@ async def get_assign_role_link(
     settings: Settings = Depends(get_settings)
 ):
     """
-    Returns the Azure Lighthouse Delegation "Deploy to Azure" link.
-    This directs the customer's admin to deploy the Lighthouse ARM template to delegate
-    Contributor access to Skysecure at the subscription scope.
+    Returns the Azure Lighthouse Delegation "Deploy to Azure" portal link.
+
+    This directs the customer's admin to deploy the Lighthouse ARM template.
+    The customer selects their own subscription IN the Azure portal when the
+    template deploys — a real subscription_id is not required upfront.
+
+    The frontend passes a placeholder (00000000-...) when no subscription has
+    been selected yet; the portal URL works regardless because the portal itself
+    asks the user to pick a subscription during deployment.
     """
-    if not subscription_id:
-        raise HTTPException(status_code=400, detail="subscription_id is required")
+    PLACEHOLDER_SUB = "00000000-0000-0000-0000-000000000000"
+    real_sub_provided = subscription_id and subscription_id != PLACEHOLDER_SUB
 
     lighthouse_url = (
         "https://portal.azure.com/#create/Microsoft.Template/uri/"
         "https%3A%2F%2Fraw.githubusercontent.com%2FsamSkysecure%2FSharepoint-agent-deploy%2Ftest%2Forchestrator%2Farm-templates%2Flighthouse-delegation.json"
     )
 
-    cli_command = (
-        f"az deployment sub create --location eastus "
-        f"--template-uri https://raw.githubusercontent.com/samSkysecure/Sharepoint-agent-deploy/test/orchestrator/arm-templates/lighthouse-delegation.json "
-        f"--subscription {subscription_id}"
-    )
+    if real_sub_provided:
+        cli_command = (
+            f"az deployment sub create --location eastus "
+            f"--template-uri https://raw.githubusercontent.com/samSkysecure/Sharepoint-agent-deploy/test/orchestrator/arm-templates/lighthouse-delegation.json "
+            f"--subscription {subscription_id}"
+        )
+    else:
+        cli_command = (
+            "az deployment sub create --location eastus "
+            "--template-uri https://raw.githubusercontent.com/samSkysecure/Sharepoint-agent-deploy/test/orchestrator/arm-templates/lighthouse-delegation.json "
+            "--subscription <YOUR_SUBSCRIPTION_ID>"
+        )
 
     return {
         "portalUrl": lighthouse_url,
         "deploymentSpnClientId": settings.deployment_spn_client_id,
         "instructions": (
-            "Click 'Deploy to Azure' to deploy the Azure Lighthouse Delegation template. "
-            "Select your subscription, review parameters, and click 'Create' to delegate Contributor and User Access Administrator access to Skysecure."
+            "Click 'Deploy to Azure' to open the Azure portal. "
+            "Select your subscription in the portal, review the template parameters, and click 'Create' to delegate "
+            "Contributor and User Access Administrator access to Skysecure. "
+            "Once the deployment completes, return to this wizard and click 'Refresh Subscriptions' in Step 4."
         ),
         "powershellFallback": cli_command,
     }
+
 
 
 @router.get("/deployment-spn-object-id")
@@ -234,22 +250,27 @@ async def list_subscriptions(
     settings: Settings = Depends(get_settings)
 ):
     """
-    Lists all subscriptions accessible in the CUSTOMER's tenant.
-    Authenticates as the deployment SPN against the customer's tenant
-    (requires admin consent to have been granted first).
+    Lists all subscriptions delegated to Skysecure via Azure Lighthouse.
+
+    Authenticates as the deployment SPN against Skysecure's HOME (managing) tenant.
+    Under Azure Lighthouse, cross-tenant ARM access is scoped to the managing tenant —
+    tokens must be acquired from the managing tenant to enumerate delegated subscriptions.
+
+    Admin consent (Step 2) only grants identity presence in the customer tenant and
+    Graph API access. ARM role assignments come from Lighthouse delegation (Step 3),
+    which delegates subscription access back to Skysecure's managing tenant SPN.
     """
     if not tenant_id:
         raise HTTPException(status_code=400, detail="tenant_id is required")
 
     try:
-        # Authenticate against the CUSTOMER's tenant (not Skysecure's home tenant).
-        # This works only after the customer admin has granted consent to the
-        # deployment SPN via the admin consent link (Step 2).
-        credential = ClientSecretCredential(
-            tenant_id=tenant_id,
-            client_id=settings.deployment_spn_client_id,
-            client_secret=settings.deployment_spn_secret,
-        )
+        # IMPORTANT: Authenticate against Skysecure's HOME tenant (managing tenant),
+        # NOT the customer's tenant. Under Lighthouse cross-tenant delegation, the
+        # managing tenant's SPN is what holds ARM role assignments on the customer's
+        # delegated subscriptions. Using the customer tenant credential here would
+        # return an empty list even after Lighthouse is set up, because the SPN only
+        # has ARM access via the managing tenant token.
+        credential = _deployment_spn_credential(settings)
         sub_client = SubscriptionClient(credential)
 
         subscriptions = [
@@ -260,14 +281,37 @@ async def list_subscriptions(
                 "state": sub.state
             }
             for sub in sub_client.subscriptions.list()
+            # Filter to only the customer's tenant subscriptions
+            if sub.tenant_id == tenant_id
         ]
 
+        # Fallback: if tenant_id filtering returns nothing (e.g., sub.tenant_id is None
+        # or differs), return all accessible subscriptions from the managing tenant
         if not subscriptions:
+            all_subs = [
+                {
+                    "subscriptionId": sub.subscription_id,
+                    "displayName": sub.display_name,
+                    "tenantId": sub.tenant_id,
+                    "state": sub.state
+                }
+                for sub in sub_client.subscriptions.list()
+            ]
+            if all_subs:
+                logger.warning(
+                    "No subscriptions matched tenant_id=%s exactly; returning all %d accessible subscription(s). "
+                    "Lighthouse delegation may be targeting a different tenant mapping.",
+                    tenant_id, len(all_subs)
+                )
+                return all_subs
+
             raise HTTPException(
                 status_code=404,
                 detail=(
-                    "No subscriptions found in this tenant. "
-                    "Ensure admin consent (Step 2) was granted and the account has at least one active subscription."
+                    "No subscriptions found via Azure Lighthouse delegation. "
+                    "Please complete Step 3 (Lighthouse Delegation) before selecting a subscription. "
+                    "Admin consent alone (Step 2) does not grant ARM subscription access — "
+                    "Lighthouse delegation is required to delegate subscription visibility to Skysecure's managing tenant."
                 )
             )
 

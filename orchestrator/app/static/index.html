@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Customer Onboarding | Agent Factory</title>
+    <meta name="description" content="Skysecure Agent Factory — guided customer onboarding and deployment wizard for Azure and Power Platform agents.">
     <link rel="stylesheet" href="/static/styles.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
 </head>
@@ -30,13 +31,13 @@
             </div>
             
             <form id="onboard-form">
-                <!-- Step 2 -->
+                <!-- Step 2: Admin Consent -->
                 <div class="step-card">
                     <div class="step-header">
                         <span class="step-badge">Step 2</span>
                         <h4>Admin Consent</h4>
                     </div>
-                    <p class="step-desc">Enter your work email or domain to resolve your tenant, then grant admin consent.</p>
+                    <p class="step-desc">Enter your work email or domain to resolve your tenant, then grant admin consent to register the deployment identity.</p>
                     
                     <div class="form-group" style="margin-top: 8px; margin-bottom: 8px;">
                         <label style="font-size: 0.75rem;">Work Email or Domain</label>
@@ -49,26 +50,22 @@
                     </div>
                 </div>
 
-                <!-- Step 3 -->
+                <!-- Step 3: Lighthouse Delegation (NO subscription required upfront) -->
                 <div class="step-card">
                     <div class="step-header">
                         <span class="step-badge">Step 3</span>
                         <h4>Delegate Access (Lighthouse)</h4>
                     </div>
-                    <p class="step-desc">Select your Azure subscription to delegate Contributor access via Azure Lighthouse.</p>
+                    <p class="step-desc">
+                        Deploy the Azure Lighthouse delegation template. When the Azure portal opens,
+                        <strong>you will select your subscription there</strong> — no need to pick one here first.
+                        Once done, return and click <em>Refresh Subscriptions</em> in Step 4.
+                    </p>
 
-                    <div class="form-group" style="margin-top: 8px; margin-bottom: 8px;">
-                        <label style="font-size: 0.75rem;">Select Azure Subscription</label>
-                        <div class="input-with-btn" style="margin-bottom: 8px;">
-                            <select id="subscriptionSelect" style="width: 100%; padding: 8px; border-radius: 6px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); color: white;">
-                                <option value="">-- Auto-discovering Subscriptions... --</option>
-                            </select>
-                        </div>
-                        <input type="hidden" id="assignRoleSubscriptionId">
-                    </div>
-
-                    <div style="margin-top: 8px; margin-bottom: 8px;">
-                        <button type="button" id="btn-assign-role" class="btn-connect" style="display: block; width: 100%; text-align: center;">Deploy to Azure</button>
+                    <div style="margin-top: 10px; margin-bottom: 8px;">
+                        <button type="button" id="btn-assign-role" class="btn-connect" style="display: block; width: 100%; text-align: center;">
+                            Deploy to Azure (Lighthouse)
+                        </button>
                     </div>
 
                     <div id="assign-role-alert" class="form-alert hidden" style="margin-bottom: 8px;"></div>
@@ -80,13 +77,37 @@
                     </div>
                 </div>
 
-                <!-- Step 4 -->
+                <!-- Step 4: Select Subscription (populated AFTER Lighthouse) -->
                 <div class="step-card">
                     <div class="step-header">
                         <span class="step-badge">Step 4</span>
-                        <h4>Configure & Deploy</h4>
+                        <h4>Select Subscription</h4>
                     </div>
-                    <p class="step-desc">Complete Steps 2 and 3 above first, then fill in the details below and deploy.</p>
+                    <p class="step-desc">
+                        After completing Step 3, click <strong>Refresh Subscriptions</strong> to load the
+                        subscription you just delegated via Lighthouse. Then select it below.
+                    </p>
+
+                    <div class="form-group" style="margin-top: 8px; margin-bottom: 8px;">
+                        <label style="font-size: 0.75rem;">Azure Subscription</label>
+                        <div class="input-with-btn" style="margin-bottom: 8px;">
+                            <select id="subscriptionSelect" style="width: 100%; padding: 8px; border-radius: 6px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); color: white;">
+                                <option value="">-- Complete Step 3 first, then Refresh --</option>
+                            </select>
+                            <button type="button" id="btn-refresh-subs" class="btn-connect">Refresh</button>
+                        </div>
+                        <div id="sub-refresh-status" class="hidden" style="font-size:0.75rem; margin-top:4px;"></div>
+                        <input type="hidden" id="assignRoleSubscriptionId">
+                    </div>
+                </div>
+
+                <!-- Step 5: Configure & Deploy -->
+                <div class="step-card">
+                    <div class="step-header">
+                        <span class="step-badge">Step 5</span>
+                        <h4>Configure &amp; Deploy</h4>
+                    </div>
+                    <p class="step-desc">Complete Steps 2–4 above first, then fill in the details below and deploy.</p>
 
                     <div style="margin-top: 12px;">
                         <div class="form-group">
