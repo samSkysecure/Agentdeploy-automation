@@ -19,7 +19,7 @@
     },
     "skysecureSpnObjectId": {
       "type": "string",
-      "defaultValue": "8b5b2baf-f7a2-4968-85db-071b2c36f482",
+      "defaultValue": "2112c0b8-de24-4f35-b8ac-10e31f0abeee",
       "metadata": {
         "description": "Object ID of the Skysecure deployment SPN (Enterprise Application / Service Principal in Skysecure's home tenant)."
       }

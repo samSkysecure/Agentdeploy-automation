@@ -63,9 +63,12 @@ class AzureDeploymentClient:
         self.customer_subscription_id = customer_subscription_id
         self.templates_dir = templates_dir
 
-        target_tenant_id = customer_tenant_id or deployment_spn_tenant_id
+        # For Azure Lighthouse cross-tenant operations, we MUST authenticate against
+        # Skysecure's home tenant (deployment_spn_tenant_id) where the delegated SPN identity
+        # lives. Authenticating against customer_tenant_id yields the customer's local SPN instance
+        # which does not possess the Lighthouse cross-tenant role assignments.
         self.credential = ClientSecretCredential(
-            tenant_id=target_tenant_id,
+            tenant_id=deployment_spn_tenant_id,
             client_id=deployment_spn_client_id,
             client_secret=deployment_spn_secret,
             additionally_allowed_tenants=["*"],
