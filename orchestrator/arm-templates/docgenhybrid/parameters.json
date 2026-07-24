@@ -1,0 +1,40 @@
+{
+    "template1": {
+        "agentSlug": "docgenhybrid",
+        "customerSlug": "contoso",
+        "location": "southindia",
+        "agentImage": "skysecureacrdev.azurecr.io/af-be-docgen-agent:v1",
+        "customerAcrLoginServer": "skysecureacrdev.azurecr.io",
+        "customerAcrResourceId": "/subscriptions/<customer-subscription-id>/resourceGroups/<customer-rg>/providers/Microsoft.ContainerRegistry/registries/<customer-acr>",
+        "microsoftAppId": "<app-registration-client-id>",
+        "microsoftAppPassword": "<from-keyvault>",
+        "customerTenantId": "<customer-tenant-id>",
+        "sharepointTenantId": "<customer-tenant-id>",
+        "sharepointSiteUrl": "https://<customer-tenant>.sharepoint.com/sites/<docgen-site>",
+        "msClientId": "<graph-client-id>",
+        "msClientSecret": "<from-keyvault>",
+        "redisHost": "<redis-host-url>",
+        "redisPassword": "<from-keyvault>",
+        "redisPort": "11749",
+        "langchainApiKey": "<from-keyvault>",
+        "langchainProject": "docgen_agent",
+        "azureDocumentIntelKey": "<from-keyvault>",
+        "azureDocumentIntelEndpoint": "https://<doc-intel-resource>.cognitiveservices.azure.com/",
+        "azureOpenAiApiKey": "<from-keyvault>",
+        "azureOpenAiEndpoint": "https://<openai-resource>.openai.azure.com/",
+        "azureOpenAiDeploymentName": "gpt-4o",
+        "azureOpenAiApiVersion": "2024-02-15-preview",
+        "azureBlobSasUrl": "<sas-url-from-keyvault>",
+        "azureStorageContainerName": "docgen-templates",
+        "fileDownloadBaseUrl": "https://<storage-account>.blob.core.windows.net/"
+    },
+    "template2": {
+        "agentSlug": "docgenhybrid",
+        "customerSlug": "contoso",
+        "botDisplayName": "Skysecure Document Generation Agent",
+        "msaAppId": "<app-registration-client-id>",
+        "msaAppTenantId": "<customer-tenant-id>",
+        "containerAppFQDN": "<output-from-template1>",
+        "sku": "F0"
+    }
+}

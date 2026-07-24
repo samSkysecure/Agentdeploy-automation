@@ -1,0 +1,12 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+azure-identity==1.19.0
+azure-mgmt-resource==23.2.0
+pydantic==2.10.4
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+httpx==0.28.1
+azure-mgmt-authorization==4.0.0
+azure-mgmt-containerregistry==14.0.0
+azure-mgmt-keyvault==11.0.0
+azure-keyvault-secrets==4.9.0

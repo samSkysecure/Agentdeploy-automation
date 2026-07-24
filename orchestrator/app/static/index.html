@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Customer Onboarding | Agent Factory</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar / Configuration Panel -->
+        <aside class="config-panel glass">
+            <header>
+                <h2>Onboarding Flow</h2>
+                <p>Follow these steps to deploy the agent</p>
+            </header>
+
+            <!-- Step 1 (Static details) -->
+            <div class="step-card">
+                <div class="step-header">
+                    <span class="step-badge">Step 1</span>
+                    <h4>Deployment SPN Client ID</h4>
+                </div>
+                <p class="step-desc">This identity runs the deployment only - it is removed from your tenant automatically once deployment succeeds.</p>
+                <div class="code-box" style="margin-top: 8px;">
+                    <span id="sp-client-id" style="font-size:0.8rem; font-family:'Fira Code',monospace;">Loading...</span>
+                    <button type="button" id="copy-sp-btn">Copy</button>
+                </div>
+            </div>
+            
+            <form id="onboard-form">
+                <!-- Step 2 -->
+                <div class="step-card">
+                    <div class="step-header">
+                        <span class="step-badge">Step 2</span>
+                        <h4>Admin Consent</h4>
+                    </div>
+                    <p class="step-desc">Enter your work email or domain to resolve your tenant, then grant admin consent.</p>
+                    
+                    <div class="form-group" style="margin-top: 8px; margin-bottom: 8px;">
+                        <label style="font-size: 0.75rem;">Work Email or Domain</label>
+                        <input type="text" id="tenantId" placeholder="user@contoso.com or contoso.com" required>
+                        <div id="tenant-resolved-badge" class="hidden" style="font-size:0.75rem; color:#10b981; margin-top:4px;">✓ Resolved Tenant ID: <span id="resolved-tenant-id-text"></span></div>
+                    </div>
+                    
+                    <div class="consent-action-box" style="margin-top: 8px;">
+                        <a id="btn-admin-consent" href="#" target="_blank" class="btn-connect disabled" style="display: block; text-align: center; text-decoration: none; line-height: 2.2;">Grant Admin Consent</a>
+                    </div>
+                </div>
+
+                <!-- Step 3 -->
+                <div class="step-card">
+                    <div class="step-header">
+                        <span class="step-badge">Step 3</span>
+                        <h4>Delegate Access (Lighthouse)</h4>
+                    </div>
+                    <p class="step-desc">Select your Azure subscription to delegate Contributor access via Azure Lighthouse.</p>
+
+                    <div class="form-group" style="margin-top: 8px; margin-bottom: 8px;">
+                        <label style="font-size: 0.75rem;">Select Azure Subscription</label>
+                        <div class="input-with-btn" style="margin-bottom: 8px;">
+                            <select id="subscriptionSelect" style="width: 100%; padding: 8px; border-radius: 6px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); color: white;">
+                                <option value="">-- Auto-discovering Subscriptions... --</option>
+                            </select>
+                        </div>
+                        <input type="hidden" id="assignRoleSubscriptionId">
+                    </div>
+
+                    <div style="margin-top: 8px; margin-bottom: 8px;">
+                        <button type="button" id="btn-assign-role" class="btn-connect" style="display: block; width: 100%; text-align: center;">Deploy to Azure</button>
+                    </div>
+
+                    <div id="assign-role-alert" class="form-alert hidden" style="margin-bottom: 8px;"></div>
+
+                    <p class="step-desc" style="font-size: 0.75rem; color: var(--text-secondary);" id="assign-role-instructions"></p>
+                    <div class="code-box hidden" id="assign-role-cli-box" style="margin-top: 8px;">
+                        <span id="assign-role-cli" style="font-size:0.75rem; font-family:'Fira Code',monospace;"></span>
+                        <button type="button" id="copy-assign-role-cli-btn">Copy</button>
+                    </div>
+                </div>
+
+                <!-- Step 4 -->
+                <div class="step-card">
+                    <div class="step-header">
+                        <span class="step-badge">Step 4</span>
+                        <h4>Configure & Deploy</h4>
+                    </div>
+                    <p class="step-desc">Complete Steps 2 and 3 above first, then fill in the details below and deploy.</p>
+
+                    <div style="margin-top: 12px;">
+                        <div class="form-group">
+                            <label>Select Agent Type</label>
+                            <select id="agentSelect" style="width: 100%; padding: 8px; border-radius: 6px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); color: white; margin-bottom: 8px;">
+                                <option value="docgenhybrid">Document Generation Hybrid Agent (docgenhybrid)</option>
+                                <option value="teamsagent">Document Intelligence Teams Agent (teamsagent)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Resource Group Name</label>
+                            <div class="input-with-btn" style="margin-bottom: 8px;">
+                                <select id="resourceGroupSelect">
+                                    <option value="__NEW__">+ Create New Resource Group</option>
+                                </select>
+                                <button type="button" id="btn-fetch-rgs" class="btn-connect">Fetch Existing</button>
+                            </div>
+                            <input type="text" id="newResourceGroupInput" placeholder="rg-skysecure-docgen" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Power Platform Environment ID</label>
+                            <input type="text" id="environmentId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" style="width: 100%;" required>
+                        </div>
+
+                        <button type="submit" id="deploy-btn" class="btn-primary" style="margin-top: 12px;">
+                            <span class="btn-text">Start Onboarding</span>
+                            <span class="loader hidden"></span>
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </aside>
+
+        <!-- Main Terminal Panel -->
+        <main class="terminal-panel glass">
+            <div class="terminal-header">
+                <div class="window-controls">
+                    <span class="dot close"></span>
+                    <span class="dot min"></span>
+                    <span class="dot max"></span>
+                </div>
+                <div class="terminal-title">Deployment Console</div>
+            </div>
+            <div class="terminal-body" id="terminal-output">
+                <div class="log-line system">Waiting for deployment configuration...</div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Device Code Auth Modal (shown mid-pipeline when a human login is required) -->
+    <div id="auth-modal" class="modal hidden">
+        <div class="modal-content glass">
+            <h2>Action Required</h2>
+            <p id="device-code-context">Microsoft requires a human login to continue this step of the deployment.</p>
+            
+            <div class="auth-steps">
+                <div class="step">
+                    <span class="step-num">1</span>
+                    <span>Copy this secure code:</span>
+                    <div class="code-box">
+                        <span id="device-code-text">XXXXXXX</span>
+                        <button id="copy-btn">Copy</button>
+                    </div>
+                </div>
+                <div class="step">
+                    <span class="step-num">2</span>
+                    <span>Open the Microsoft login page and enter the code.</span>
+                    <a id="device-code-link" href="#" target="_blank" class="btn-secondary">Open Login Page</a>
+                </div>
+            </div>
+            
+            <p class="waiting-text">Deployment will resume automatically once login is complete...</p>
+        </div>
+    </div>
+
+    <!-- Success Modal -->
+    <div id="success-modal" class="modal hidden">
+        <div class="modal-content glass">
+            <h2 style="margin-bottom: 8px;">Onboarding Complete!</h2>
+            <p style="margin-bottom: 24px;">The agent has been fully deployed to Azure and Power Platform. The deployment SPN's access has been automatically removed from your tenant.</p>
+            
+            <div class="auth-steps">
+                <div class="step">
+                    <span class="step-num" style="background: #8b5cf6; box-shadow: 0 2px 10px rgba(139, 92, 246, 0.4);">1</span>
+                    <span>Provisioned SharePoint Site:</span>
+                    <a id="sharepoint-site-link" href="#" target="_blank" class="btn-secondary" style="margin-top:8px; display: inline-block;">Open SharePoint Site</a>
+                </div>
+                <div class="step">
+                    <span class="step-num" style="background: #10b981; box-shadow: 0 2px 10px rgba(16, 185, 129, 0.4);">2</span>
+                    <span>Teams app manifest published to the customer's app catalog automatically.</span>
+                    <div id="catalog-published-detail" style="font-size:0.9rem; color:#cbd5e1; margin-top:8px; background: rgba(0,0,0,0.4); padding: 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1);"></div>
+                    <a id="download-manifest-btn" href="#" class="btn-secondary" style="margin-top:8px; display:inline-block;">Download Manifest .ZIP (backup copy)</a>
+                </div>
+                <div class="step">
+                    <span class="step-num" style="background: #3b82f6; box-shadow: 0 2px 10px rgba(59, 130, 246, 0.4);">3</span>
+                    <span>Final step (manual, Microsoft platform requirement):</span>
+                    <div style="font-size:0.9rem; color:#cbd5e1; margin-top:8px; background: rgba(0,0,0,0.4); padding: 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1);">
+                        The app now exists in the customer's catalog. Go to <a href="https://admin.teams.microsoft.com/" target="_blank" style="color:#a855f7; font-weight: 600;">admin.teams.microsoft.com</a> &gt; <b>Teams apps</b> &gt; <b>Manage apps</b>, find it by name, and click <b>Deploy</b> &gt; <b>Everyone</b> to make it visible to users. This deploy/assign step has no Graph API equivalent and must be done in the admin center.
+                    </div>
+                </div>
+            </div>
+            
+            <button id="close-success-btn" class="btn-secondary" style="margin-top: 24px;">Close Dashboard</button>
+        </div>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>

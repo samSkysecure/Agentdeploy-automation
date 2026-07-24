@@ -1,0 +1,30 @@
+{
+    "template1": {
+        "agentSlug": "teamsagent",
+        "customerSlug": "contoso",
+        "location": "southindia",
+        "agentImage": "docintelagent.azurecr.io/docintelagent:v2",
+        "customerAcrLoginServer": "docintelagent.azurecr.io",
+        "customerAcrResourceId": "/subscriptions/<customer-subscription-id>/resourceGroups/<customer-rg>/providers/Microsoft.ContainerRegistry/registries/<customer-acr>",
+        "microsoftAppId": "<app-registration-client-id>",
+        "microsoftAppPassword": "<from-keyvault>",
+        "customerTenantId": "<customer-tenant-id>",
+        "sharepointTenantId": "<customer-tenant-id>",
+        "sharepointSiteUrl": "https://<customer-tenant>.sharepoint.com/sites/<docintel-site>",
+        "msClientId": "<graph-client-id>",
+        "msClientSecret": "<from-keyvault>",
+        "azureDocumentIntelKey": "<from-keyvault>",
+        "azureDocumentIntelEndpoint": "https://<resource>.cognitiveservices.azure.com/",
+        "redisHost": "<redis-host-url>",
+        "redisPassword": "<from-keyvault>",
+        "langchainApiKey": "<from-keyvault>"
+    },
+    "template2": {
+        "agentSlug": "teamsagent",
+        "customerSlug": "contoso",
+        "botDisplayName": "Document Intelligence Agent",
+        "msaAppId": "<app-registration-client-id>",
+        "containerAppFQDN": "<output-from-template1>",
+        "sku": "F0"
+    }
+}

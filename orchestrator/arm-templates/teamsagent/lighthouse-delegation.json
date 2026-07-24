@@ -1,0 +1,87 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-08-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "mspOfferName": {
+      "type": "string",
+      "defaultValue": "Skysecure Document Intelligence Agent - Managed Deployment Access"
+    },
+    "mspOfferDescription": {
+      "type": "string",
+      "defaultValue": "Grants Skysecure's deployment Service Principal Contributor access to deploy and manage Document Intelligence Agent resources in this subscription."
+    },
+    "managedByTenantId": {
+      "type": "string",
+      "defaultValue": "547b64a7-e66e-48df-a146-3e898cbcb60f",
+      "metadata": { "description": "Skysecure's own Entra tenant ID." }
+    },
+    "skysecureSpnObjectId": {
+      "type": "string",
+      "defaultValue": "5bcad566-9621-4b41-9ca9-021cd0ec9c49",
+      "metadata": { "description": "Object ID of the Skysecure deployment SPN." }
+    },
+    "roleDefinitionId": {
+      "type": "string",
+      "defaultValue": "b24988ac-6180-42a0-ab88-20f7382dd24c",
+      "metadata": { "description": "Built-in Contributor role ID." }
+    },
+    "userAccessAdminRoleDefinitionId": {
+      "type": "string",
+      "defaultValue": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
+      "metadata": { "description": "Built-in User Access Administrator role ID." }
+    },
+    "managedServicesDeleteRoleDefinitionId": {
+      "type": "string",
+      "defaultValue": "91c1777a-f3dc-4fae-b103-61d183457e46",
+      "metadata": { "description": "Lighthouse Self-Revocation Role ID." }
+    }
+  },
+  "variables": {
+    "registrationName": "[guid(parameters('mspOfferName'))]",
+    "assignmentName": "[guid(parameters('skysecureSpnObjectId'), parameters('roleDefinitionId'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ManagedServices/registrationDefinitions",
+      "apiVersion": "2022-10-01",
+      "name": "[variables('registrationName')]",
+      "properties": {
+        "registrationDefinitionName": "[parameters('mspOfferName')]",
+        "description": "[parameters('mspOfferDescription')]",
+        "managedByTenantId": "[parameters('managedByTenantId')]",
+        "authorizations": [
+          {
+            "principalId": "[parameters('skysecureSpnObjectId')]",
+            "roleDefinitionId": "[parameters('roleDefinitionId')]",
+            "principalIdDisplayName": "Skysecure Deployment SPN"
+          },
+          {
+            "principalId": "[parameters('skysecureSpnObjectId')]",
+            "roleDefinitionId": "[parameters('userAccessAdminRoleDefinitionId')]",
+            "principalIdDisplayName": "Skysecure Deployment SPN (Role Assignments)",
+            "delegatedRoleDefinitionIds": [
+              "7f951dda-4ed3-4680-a7ca-43fe172d538d",
+              "b86a8fe4-44ce-4948-aee5-eccb2c155cd7"
+            ]
+          },
+          {
+            "principalId": "[parameters('skysecureSpnObjectId')]",
+            "roleDefinitionId": "[parameters('managedServicesDeleteRoleDefinitionId')]",
+            "principalIdDisplayName": "Skysecure Deployment SPN (Lighthouse Self-Revocation)"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.ManagedServices/registrationAssignments",
+      "apiVersion": "2022-10-01",
+      "name": "[variables('assignmentName')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedServices/registrationDefinitions', variables('registrationName'))]"
+      ],
+      "properties": {
+        "registrationDefinitionId": "[resourceId('Microsoft.ManagedServices/registrationDefinitions', variables('registrationName'))]"
+      }
+    }
+  ]
+}

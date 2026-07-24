@@ -1,0 +1,89 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "agentSlug": {
+      "type": "string",
+      "defaultValue": "teamsagent",
+      "metadata": { "description": "Short identifier for the agent e.g. 'teamsagent'" }
+    },
+    "customerSlug": {
+      "type": "string",
+      "metadata": { "description": "Short identifier for the customer e.g. 'contoso'" }
+    },
+    "botDisplayName": {
+      "type": "string",
+      "defaultValue": "Skysecure Document Intelligence Agent",
+      "metadata": { "description": "Human-readable display name for the bot in Teams" }
+    },
+    "msaAppId": {
+      "type": "string",
+      "metadata": { "description": "Per-customer agent App Registration client ID" }
+    },
+    "containerAppFQDN": {
+      "type": "string",
+      "metadata": { "description": "FQDN output from Template 1" }
+    },
+    "msaAppTenantId": {
+      "type": "string",
+      "metadata": { "description": "The tenant ID of the App Registration" }
+    },
+    "sku": {
+      "type": "string",
+      "defaultValue": "F0",
+      "allowedValues": [ "F0", "S1" ],
+      "metadata": { "description": "F0 for free tier (testing), S1 for production" }
+    }
+  },
+  "variables": {
+    "botServiceName": "[concat('bot-', parameters('agentSlug'), '-', parameters('customerSlug'))]",
+    "messagingEndpoint": "[concat('https://', parameters('containerAppFQDN'), '/api/messages')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.BotService/botServices",
+      "apiVersion": "2022-09-15",
+      "name": "[variables('botServiceName')]",
+      "location": "global",
+      "sku": { "name": "[parameters('sku')]" },
+      "kind": "azurebot",
+      "properties": {
+        "displayName": "[parameters('botDisplayName')]",
+        "msaAppType": "SingleTenant",
+        "msaAppId": "[parameters('msaAppId')]",
+        "msaAppTenantId": "[parameters('msaAppTenantId')]",
+        "msaAppMSIResourceId": "",
+        "endpoint": "[variables('messagingEndpoint')]",
+        "openWithHint": "",
+        "appPasswordHint": ""
+      }
+    },
+    {
+      "type": "Microsoft.BotService/botServices/channels",
+      "apiVersion": "2022-09-15",
+      "name": "[concat(variables('botServiceName'), '/MsTeamsChannel')]",
+      "location": "global",
+      "dependsOn": [
+        "[resourceId('Microsoft.BotService/botServices', variables('botServiceName'))]"
+      ],
+      "properties": {
+        "channelName": "MsTeamsChannel",
+        "properties": { "isEnabled": true }
+      }
+    }
+  ],
+  "outputs": {
+    "botServiceName": {
+      "type": "string",
+      "value": "[variables('botServiceName')]"
+    },
+    "botServiceResourceId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.BotService/botServices', variables('botServiceName'))]"
+    },
+    "messagingEndpoint": {
+      "type": "string",
+      "value": "[variables('messagingEndpoint')]"
+    }
+  }
+}

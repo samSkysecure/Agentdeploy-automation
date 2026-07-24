@@ -1,0 +1,648 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "agentSlug": {
+      "type": "string",
+      "defaultValue": "docgenhybrid",
+      "metadata": {
+        "description": "Short identifier for the agent e.g. 'docgenhybrid'"
+      }
+    },
+    "customerSlug": {
+      "type": "string",
+      "metadata": {
+        "description": "Short identifier for the customer e.g. 'contoso'"
+      }
+    },
+    "location": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure region e.g. 'southindia'"
+      }
+    },
+    "agentImage": {
+      "type": "string",
+      "metadata": {
+        "description": "Full ACR image path including tag e.g. skysecureacrdev.azurecr.io/teamsagent:v2"
+      }
+    },
+    "customerAcrLoginServer": {
+      "type": "string",
+      "metadata": {
+        "description": "Customer's OWN ACR login server"
+      }
+    },
+    "customerAcrResourceId": {
+      "type": "string",
+      "metadata": {
+        "description": "Full ARM resource ID of the customer's ACR"
+      }
+    },
+    "microsoftAppId": {
+      "type": "string",
+      "metadata": {
+        "description": "Per-customer agent App Registration client ID"
+      }
+    },
+    "microsoftAppPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Per-customer agent App Registration client secret"
+      }
+    },
+    "customerTenantId": {
+      "type": "string",
+      "metadata": {
+        "description": "Customer Entra tenant ID"
+      }
+    },
+    "sharepointTenantId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Tenant ID for SharePoint Graph API, defaults to customerTenantId if empty"
+      }
+    },
+    "sharepointSiteUrl": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "SharePoint Site URL for document processing"
+      }
+    },
+    "msClientId": {
+      "type": "string",
+      "metadata": {
+        "description": "Microsoft Graph Client ID"
+      }
+    },
+    "msClientSecret": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Microsoft Graph Client Secret"
+      }
+    },
+    "redisHost": {
+      "type": "string",
+      "metadata": {
+        "description": "Redis Cache Host"
+      }
+    },
+    "redisPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Redis Cache Password"
+      }
+    },
+    "langchainApiKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Langchain API Key"
+      }
+    },
+    "azureDocumentIntelKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Document Intelligence Key"
+      }
+    },
+    "azureDocumentIntelEndpoint": {
+      "type": "string",
+      "metadata": {
+        "description": "Document Intelligence Endpoint"
+      }
+    },
+    "azureOpenAiApiKey": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Azure OpenAI API Key"
+      }
+    },
+    "azureOpenAiEndpoint": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Azure OpenAI Endpoint"
+      }
+    },
+    "azureOpenAiDeploymentName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Azure OpenAI Deployment Name"
+      }
+    },
+    "azureOpenAiApiVersion": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure OpenAI API Version"
+      }
+    },
+    "fileDownloadBaseUrl": {
+      "type": "string",
+      "metadata": {
+        "description": "File Download Base URL"
+      }
+    },
+    "azureStorageContainerName": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure Storage Container Name"
+      }
+    },
+    "azureBlobSasUrl": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure Blob SAS URL"
+      }
+    },
+    "redisPort": {
+      "type": "string",
+      "defaultValue": "11749",
+      "metadata": {
+        "description": "Redis Cache Port"
+      }
+    },
+    "langchainProject": {
+      "type": "string",
+      "defaultValue": "document_intel",
+      "metadata": {
+        "description": "LangChain Project Name"
+      }
+    }
+  },
+  "variables": {
+    "containerAppName": "[concat('ca-', parameters('agentSlug'), '-', parameters('customerSlug'))]",
+    "environmentName": "[concat('env-', parameters('agentSlug'), '-', parameters('customerSlug'))]",
+    "uamiName": "[concat('id-', parameters('agentSlug'), '-', parameters('customerSlug'))]",
+    "acrPullRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
+    "msAppPasswordSecretRef": "ms-app-password",
+    "docIntelKeySecretRef": "doc-intel-key",
+    "msClientSecretRef": "ms-client-secret",
+    "redisPasswordSecretRef": "redis-password",
+    "langchainKeySecretRef": "langchain-key",
+    "azureOpenAiKeySecretRef": "azure-openai-key",
+    "azureBlobSasUrlSecretRef": "azure-blob-sas-url"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2023-01-31",
+      "name": "[variables('uamiName')]",
+      "location": "[parameters('location')]"
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(parameters('customerAcrResourceId'), variables('uamiName'), variables('acrPullRoleDefinitionId'))]",
+      "scope": "[format('Microsoft.ContainerRegistry/registries/{0}', last(split(parameters('customerAcrResourceId'), '/')))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('uamiName'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[variables('acrPullRoleDefinitionId')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('uamiName')), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.App/managedEnvironments",
+      "apiVersion": "2023-05-01",
+      "name": "[variables('environmentName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "zoneRedundant": false
+      }
+    },
+    {
+      "type": "Microsoft.App/containerapps",
+      "apiVersion": "2023-05-01",
+      "name": "[variables('containerAppName')]",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('uamiName'))]": {}
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', variables('environmentName'))]",
+        "[extensionResourceId(parameters('customerAcrResourceId'), 'Microsoft.Authorization/roleAssignments', guid(parameters('customerAcrResourceId'), variables('uamiName'), variables('acrPullRoleDefinitionId')))]"
+      ],
+      "kind": "containerapps",
+      "properties": {
+        "environmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('environmentName'))]",
+        "configuration": {
+          "secrets": [
+            {
+              "name": "[variables('msAppPasswordSecretRef')]",
+              "value": "[parameters('microsoftAppPassword')]"
+            },
+            {
+              "name": "[variables('docIntelKeySecretRef')]",
+              "value": "[parameters('azureDocumentIntelKey')]"
+            },
+            {
+              "name": "[variables('msClientSecretRef')]",
+              "value": "[parameters('msClientSecret')]"
+            },
+            {
+              "name": "[variables('redisPasswordSecretRef')]",
+              "value": "[parameters('redisPassword')]"
+            },
+            {
+              "name": "[variables('langchainKeySecretRef')]",
+              "value": "[parameters('langchainApiKey')]"
+            },
+            {
+              "name": "[variables('azureOpenAiKeySecretRef')]",
+              "value": "[if(empty(parameters('azureOpenAiApiKey')), 'not-configured', parameters('azureOpenAiApiKey'))]"
+            },
+            {
+              "name": "[variables('azureBlobSasUrlSecretRef')]",
+              "value": "[parameters('azureBlobSasUrl')]"
+            }
+          ],
+          "registries": [
+            {
+              "server": "[parameters('customerAcrLoginServer')]",
+              "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('uamiName'))]"
+            }
+          ],
+          "activeRevisionsMode": "Single",
+          "ingress": {
+            "external": true,
+            "transport": "Auto",
+            "allowInsecure": false,
+            "targetPort": 3978,
+            "stickySessions": {
+              "affinity": "none"
+            }
+          }
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "[variables('containerAppName')]",
+              "image": "[parameters('agentImage')]",
+              "resources": {
+                "cpu": 0.5,
+                "memory": "1Gi"
+              },
+              "env": [
+                {
+                  "name": "PORT",
+                  "value": "3978"
+                },
+                {
+                  "name": "CLIENT_ID",
+                  "value": "[parameters('microsoftAppId')]"
+                },
+                {
+                  "name": "CLIENT_SECRET",
+                  "secretRef": "[variables('msAppPasswordSecretRef')]"
+                },
+                {
+                  "name": "CLIENT_TYPE",
+                  "value": "AppPassword"
+                },
+                {
+                  "name": "BOT_TYPE",
+                  "value": "SingleTenant"
+                },
+                {
+                  "name": "TENANT_ID",
+                  "value": "[parameters('customerTenantId')]"
+                },
+                {
+                  "name": "AZURE_DOCUMENT_INTEL_KEY",
+                  "secretRef": "[variables('docIntelKeySecretRef')]"
+                },
+                {
+                  "name": "AZURE_DOCUMENT_INTEL_ENDPOINT",
+                  "value": "[parameters('azureDocumentIntelEndpoint')]"
+                },
+                {
+                  "name": "AZURE_DOCUMENT_INTEL_MODEL",
+                  "value": "prebuilt-layout"
+                },
+                {
+                  "name": "MSTENANT_ID",
+                  "value": "[if(empty(parameters('sharepointTenantId')), parameters('customerTenantId'), parameters('sharepointTenantId'))]"
+                },
+                {
+                  "name": "MSCLIENT_ID",
+                  "value": "[parameters('msClientId')]"
+                },
+                {
+                  "name": "MSCLIENT_SECRET",
+                  "secretRef": "[variables('msClientSecretRef')]"
+                },
+                {
+                  "name": "MS_AUTHORITY_BASE",
+                  "value": "https://login.microsoftonline.com"
+                },
+                {
+                  "name": "GRAPH_BASE_URL",
+                  "value": "https://graph.microsoft.com/v1.0"
+                },
+                {
+                  "name": "GRAPH_SCOPE",
+                  "value": "https://graph.microsoft.com/.default"
+                },
+                {
+                  "name": "GRAPH_SCOPES",
+                  "value": "Mail.ReadWrite,User.Read,People.Read,Mail.Send"
+                },
+                {
+                  "name": "GRAPH_URL",
+                  "value": "https://graph.microsoft.com/v1.0/shares/{share_id}/driveItem/content"
+                },
+                {
+                  "name": "GRAPH_TOKEN_BUFFER_SECONDS",
+                  "value": "60"
+                },
+                {
+                  "name": "REDIS_HOST",
+                  "value": "[parameters('redisHost')]"
+                },
+                {
+                  "name": "REDIS_PORT",
+                  "value": "[parameters('redisPort')]"
+                },
+                {
+                  "name": "REDIS_USERNAME",
+                  "value": "default"
+                },
+                {
+                  "name": "REDIS_PASSWORD",
+                  "secretRef": "[variables('redisPasswordSecretRef')]"
+                },
+                {
+                  "name": "REDIS_SSL",
+                  "value": "false"
+                },
+                {
+                  "name": "REDIS_SESSION_TTL",
+                  "value": "86400"
+                },
+                {
+                  "name": "REDIS_DOC_TTL",
+                  "value": "3600"
+                },
+                {
+                  "name": "REDIS_CHECKPOINT_TTL",
+                  "value": "86400"
+                },
+                {
+                  "name": "LANGCHAIN_TRACING_V2",
+                  "value": "true"
+                },
+                {
+                  "name": "LANGCHAIN_API_KEY",
+                  "secretRef": "[variables('langchainKeySecretRef')]"
+                },
+                {
+                  "name": "LANGCHAIN_PROJECT",
+                  "value": "[parameters('langchainProject')]"
+                },
+                {
+                  "name": "LANGCHAIN_ENDPOINT",
+                  "value": "https://api.smith.langchain.com"
+                },
+                {
+                  "name": "MAX_TEAMS_MESSAGE",
+                  "value": "3600"
+                },
+                {
+                  "name": "DECISION_TEMPERATURE",
+                  "value": "0"
+                },
+                {
+                  "name": "AGENT_MAX_ITERATIONS",
+                  "value": "5"
+                },
+                {
+                  "name": "RATE_WINDOW_SECONDS",
+                  "value": "60"
+                },
+                {
+                  "name": "RATE_LIMIT_REQUESTS",
+                  "value": "30"
+                },
+                {
+                  "name": "MAX_CONCURRENT_BG_TASKS",
+                  "value": "5"
+                },
+                {
+                  "name": "BG_TASK_TIMEOUT_SECONDS",
+                  "value": "500"
+                },
+                {
+                  "name": "DOC_PROCESSING_BG_TASK_TIMEOUT_SECONDS",
+                  "value": "3600"
+                },
+                {
+                  "name": "DOC_SUMMARY_TIMEOUT_SECONDS",
+                  "value": "800"
+                },
+                {
+                  "name": "DEFAULT_FILENAME",
+                  "value": "document"
+                },
+                {
+                  "name": "FILE_GENERATION_ENABLED",
+                  "value": "true"
+                },
+                {
+                  "name": "TEMP_FILE_TTL_SECONDS",
+                  "value": "3600"
+                },
+                {
+                  "name": "FILE_GENERATION_MAX_SIZE_MB",
+                  "value": "10"
+                },
+                {
+                  "name": "FILE_DOWNLOAD_BASE_URL",
+                  "value": "[parameters('fileDownloadBaseUrl')]"
+                },
+                {
+                  "name": "AZURE_STORAGE_CONTAINER_NAME",
+                  "value": "[parameters('azureStorageContainerName')]"
+                },
+                {
+                  "name": "LOG_ENABLED",
+                  "value": "true"
+                },
+                {
+                  "name": "LOG_LEVEL",
+                  "value": "INFO"
+                },
+                {
+                  "name": "HTTP_TIMEOUT",
+                  "value": "30.0"
+                },
+                {
+                  "name": "RATE_LIMIT_SECONDS",
+                  "value": "3"
+                },
+                {
+                  "name": "MAX_TEMPLATE_TEXT_LENGTH",
+                  "value": "1000000"
+                },
+                {
+                  "name": "TEMPLATE_BLOB_PREFIX",
+                  "value": "templates/"
+                },
+                {
+                  "name": "OUTPUT_BLOB_PREFIX",
+                  "value": "output/"
+                },
+                {
+                  "name": "LIBREOFFICE_TIMEOUT",
+                  "value": "30"
+                },
+                {
+                  "name": "AZURE_BLOB_SAS_URL",
+                  "secretRef": "[variables('azureBlobSasUrlSecretRef')]"
+                },
+                {
+                  "name": "AZURE_BLOB_CONTAINER",
+                  "value": "[parameters('azureStorageContainerName')]"
+                },
+                {
+                  "name": "REDIS_URL",
+                  "value": "[parameters('redisHost')]"
+                },
+                {
+                  "name": "REDIS_KEY",
+                  "secretRef": "[variables('redisPasswordSecretRef')]"
+                },
+                {
+                  "name": "MAX_HISTORY",
+                  "value": "20"
+                },
+                {
+                  "name": "REDIS_TTL",
+                  "value": "3600"
+                },
+                {
+                  "name": "MAX_FILE_SIZE_MB",
+                  "value": "5"
+                },
+                {
+                  "name": "TEMPERATURE",
+                  "value": "0"
+                },
+                {
+                  "name": "TEMP_DIR",
+                  "value": "/tmp"
+                },
+                {
+                  "name": "SHAREPOINT_FOLDER_PATH",
+                  "value": "Shared Documents/Docgen Testing"
+                },
+                {
+                  "name": "BULK_MAX_CONCURRENCY",
+                  "value": "3"
+                },
+                {
+                  "name": "FUZZY_MATCH_THRESHOLD",
+                  "value": "0.85"
+                },
+                {
+                  "name": "COPILOT_FLOW_URL",
+                  "value": "https://placeholder-url.com"
+                },
+                {
+                  "name": "SHAREPOINT_SITE_URL",
+                  "value": "[if(empty(parameters('sharepointSiteUrl')), 'https://placeholder-site.com', parameters('sharepointSiteUrl'))]"
+                },
+                {
+                  "name": "SHAREPOINT_TEMPLATES_LIBRARY",
+                  "value": "deployed template"
+                },
+                {
+                  "name": "SHAREPOINT_GENERATED_LIBRARY",
+                  "value": "Deployed document library"
+                },
+                {
+                  "name": "AZURE_OPENAI_API_KEY",
+                  "secretRef": "[variables('azureOpenAiKeySecretRef')]"
+                },
+                {
+                  "name": "AZURE_OPENAI_ENDPOINT",
+                  "value": "[parameters('azureOpenAiEndpoint')]"
+                },
+                {
+                  "name": "AZURE_OPENAI_DEPLOYMENT_NAME",
+                  "value": "[parameters('azureOpenAiDeploymentName')]"
+                },
+                {
+                  "name": "AZURE_OPENAI_API_VERSION",
+                  "value": "[parameters('azureOpenAiApiVersion')]"
+                },
+                {
+                  "name": "ENFORCE_PII_COMPLIANCE",
+                  "value": "true"
+                },
+                {
+                  "name": "DENSITY_MIN_ALPHABETIC_RATIO",
+                  "value": "0.3"
+                },
+                {
+                  "name": "DENSITY_MIN_WORD_ENTROPY",
+                  "value": "1.5"
+                },
+                {
+                  "name": "DENSITY_MAX_REPEATED_TOKEN_RATIO",
+                  "value": "0.3"
+                },
+                {
+                  "name": "CHUNKING_MAX_SECTION_SIZE",
+                  "value": "3000"
+                },
+                {
+                  "name": "CHUNKING_OVERLAP_SIZE",
+                  "value": "200"
+                },
+                {
+                  "name": "CHUNKING_MIN_PARAGRAPH_COUNT",
+                  "value": "2"
+                },
+                {
+                  "name": "CHUNKING_DENSITY_SAMPLE_SIZE",
+                  "value": "500"
+                },
+                {
+                  "name": "CHUNKING_WORKER_COUNT",
+                  "value": "4"
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "minReplicas": 1,
+            "maxReplicas": 3
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "containerAppFQDN": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.App/containerapps', variables('containerAppName')), '2023-05-01').configuration.ingress.fqdn]"
+    },
+    "containerAppName": {
+      "type": "string",
+      "value": "[variables('containerAppName')]"
+    },
+    "containerAppPrincipalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('uamiName')), '2023-01-31').principalId]"
+    }
+  }
+}
