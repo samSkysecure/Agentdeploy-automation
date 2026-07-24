@@ -159,21 +159,33 @@ async def get_assign_role_link(
     PLACEHOLDER_SUB = "00000000-0000-0000-0000-000000000000"
     real_sub_provided = subscription_id and subscription_id != PLACEHOLDER_SUB
 
+    # Points to the unified Lighthouse delegation template in the current repo.
+    # Both docgenhybrid and teamsagent use the same delegation template so we
+    # use docgenhybrid as the canonical source (they are identical).
+    TEMPLATE_RAW_URL = (
+        "https://raw.githubusercontent.com/samSkysecure/Agentdeploy-automation/main"
+        "/orchestrator/arm-templates/docgenhybrid/lighthouse-delegation.json"
+    )
+    TEMPLATE_RAW_URL_ENCODED = (
+        "https%3A%2F%2Fraw.githubusercontent.com%2FsamSkysecure%2FAgentdeploy-automation%2Fmain"
+        "%2Forchestrator%2Farm-templates%2Fdocgenhybrid%2Flighthouse-delegation.json"
+    )
+
     lighthouse_url = (
         "https://portal.azure.com/#create/Microsoft.Template/uri/"
-        "https%3A%2F%2Fraw.githubusercontent.com%2FsamSkysecure%2FSharepoint-agent-deploy%2Ftest%2Forchestrator%2Farm-templates%2Flighthouse-delegation.json"
+        + TEMPLATE_RAW_URL_ENCODED
     )
 
     if real_sub_provided:
         cli_command = (
             f"az deployment sub create --location eastus "
-            f"--template-uri https://raw.githubusercontent.com/samSkysecure/Sharepoint-agent-deploy/test/orchestrator/arm-templates/lighthouse-delegation.json "
+            f"--template-uri {TEMPLATE_RAW_URL} "
             f"--subscription {subscription_id}"
         )
     else:
         cli_command = (
-            "az deployment sub create --location eastus "
-            "--template-uri https://raw.githubusercontent.com/samSkysecure/Sharepoint-agent-deploy/test/orchestrator/arm-templates/lighthouse-delegation.json "
+            f"az deployment sub create --location eastus "
+            f"--template-uri {TEMPLATE_RAW_URL} "
             "--subscription <YOUR_SUBSCRIPTION_ID>"
         )
 
