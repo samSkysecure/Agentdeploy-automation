@@ -127,10 +127,6 @@
                             </div>
                             <input type="text" id="newResourceGroupInput" placeholder="rg-skysecure-docgen" required>
                         </div>
-                        <div class="form-group">
-                            <label>Power Platform Environment ID</label>
-                            <input type="text" id="environmentId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" style="width: 100%;" required>
-                        </div>
 
                         <button type="submit" id="deploy-btn" class="btn-primary" style="margin-top: 12px;">
                             <span class="btn-text">Start Onboarding</span>
@@ -157,29 +153,49 @@
         </main>
     </div>
 
-    <!-- Device Code Auth Modal (shown mid-pipeline when a human login is required) -->
+    <!-- Device Code Auth Modal (shown mid-pipeline when a human login is required,
+         or when multiple Power Platform environments are found and the user must pick one) -->
     <div id="auth-modal" class="modal hidden">
         <div class="modal-content glass">
-            <h2>Action Required</h2>
-            <p id="device-code-context">Microsoft requires a human login to continue this step of the deployment.</p>
-            
-            <div class="auth-steps">
-                <div class="step">
-                    <span class="step-num">1</span>
-                    <span>Copy this secure code:</span>
-                    <div class="code-box">
-                        <span id="device-code-text">XXXXXXX</span>
-                        <button id="copy-btn">Copy</button>
+            <h2 id="auth-modal-title">Action Required</h2>
+
+            <!-- Section A: Device code login -->
+            <div id="device-code-section">
+                <p id="device-code-context">Microsoft requires a human login to continue this step of the deployment.</p>
+                <div class="auth-steps">
+                    <div class="step">
+                        <span class="step-num">1</span>
+                        <span>Copy this secure code:</span>
+                        <div class="code-box">
+                            <span id="device-code-text">XXXXXXX</span>
+                            <button id="copy-btn">Copy</button>
+                        </div>
+                    </div>
+                    <div class="step">
+                        <span class="step-num">2</span>
+                        <span>Open the Microsoft login page and enter the code.</span>
+                        <a id="device-code-link" href="#" target="_blank" class="btn-secondary">Open Login Page</a>
                     </div>
                 </div>
-                <div class="step">
-                    <span class="step-num">2</span>
-                    <span>Open the Microsoft login page and enter the code.</span>
-                    <a id="device-code-link" href="#" target="_blank" class="btn-secondary">Open Login Page</a>
-                </div>
+                <p class="waiting-text">Deployment will resume automatically once login is complete...</p>
             </div>
-            
-            <p class="waiting-text">Deployment will resume automatically once login is complete...</p>
+
+            <!-- Section B: Power Platform environment selection
+                 Shown when multiple environments are found and none is auto-selected -->
+            <div id="env-selection-section" class="hidden">
+                <p style="color: var(--text-secondary); margin-bottom: 16px;">
+                    Multiple Power Platform environments were found. Select the one where the agent should be deployed:
+                </p>
+                <select id="pp-env-select" style="width:100%; padding:10px; border-radius:8px;
+                    background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.15);
+                    color:white; font-size:0.9rem; margin-bottom:16px;">
+                    <option value="">-- Select an environment --</option>
+                </select>
+                <button id="btn-confirm-env" class="btn-primary" style="width:100%;" disabled>
+                    Continue Deployment
+                </button>
+                <p class="waiting-text" style="margin-top:12px;">The deployment is paused and waiting for your selection.</p>
+            </div>
         </div>
     </div>
 

@@ -16,6 +16,7 @@ class DeploymentStatus(str, Enum):
     GENERATING_MANIFEST = "generating_manifest"
     PROVISIONING_SHAREPOINT = "provisioning_sharepoint"
     AWAITING_USER_DEVICE_AUTH = "awaiting_user_device_auth"
+    AWAITING_ENVIRONMENT_SELECTION = "awaiting_environment_selection"
     IMPORTING_COPILOT_SOLUTION = "importing_copilot_solution"
     PUBLISHING_MANIFEST = "publishing_manifest"
     TEARING_DOWN_DEPLOYMENT_SPN = "tearing_down_deployment_spn"
@@ -70,7 +71,16 @@ class DeploymentRequest(BaseModel):
     power_platform_tenant_id: Optional[str] = Field(
         "547b64a7-e66e-48df-a146-3e898cbcb60f", description="Tenant ID where Copilot Studio / Power Platform environment lives. Defaults to Skysecure tenant 547b64a7-e66e-48df-a146-3e898cbcb60f."
     )
-    environment_id: str = Field(..., description="Power Platform environment ID or URL - resolved to a GUID automatically.")
+    environment_id: Optional[str] = Field(
+        None,
+        description=(
+            "Power Platform environment instance URL or GUID. "
+            "When omitted (the default), the orchestrator auto-discovers available "
+            "environments after the device-code login step and either selects the "
+            "Production environment automatically or pauses to let the user pick "
+            "from a dropdown in the wizard UI."
+        )
+    )
     solution_zip_path: str = Field(
         "../docgen_1_0_0_2.zip",
         description="Path to the agent's Copilot Studio solution zip, on the orchestrator's filesystem."
@@ -131,6 +141,9 @@ class DeploymentRecord(BaseModel):
     device_code_info: Optional[dict] = None  # {"user_code": ..., "verification_uri": ..., "purpose": "pac_auth"|"user_token"}
     copilot_flow_webhook_url: Optional[str] = None
     power_platform_environment_guid: Optional[str] = None
+    # Populated when multiple usable PP environments are found and auto-selection
+    # is not possible; cleared once the user makes a selection via the wizard.
+    available_pp_environments: Optional[list] = None  # [{"displayName", "instanceUrl", "environmentSku"}]
 
     # --- Teardown tracking (deployment SPN only - separate from the above) ---
     deployment_spn_teardown_completed: bool = False

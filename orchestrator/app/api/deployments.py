@@ -1,8 +1,10 @@
 """
-API surface: two endpoints.
+API surface: four endpoints.
 
-POST /deployments       -> queue a new deployment, returns immediately
-GET  /deployments/{id}  -> poll status/progress/outputs
+POST /deployments                           -> queue a new deployment, returns immediately
+GET  /deployments/{id}                      -> poll status/progress/outputs
+GET  /deployments                           -> list all deployments
+POST /deployments/{id}/select-environment   -> submit Power Platform environment selection
 
 The actual ARM work happens off the event loop in a thread pool. This
 matters: run_deployment() makes BLOCKING Azure SDK calls (poller.result()
@@ -17,6 +19,7 @@ import logging
 import uuid
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from app.core.config import get_settings
 from app.models.deployment import DeploymentRecord, DeploymentRequest, DeploymentStatus
@@ -64,3 +67,39 @@ def get_deployment(deployment_id: str):
 @router.get("", response_model=list[DeploymentRecord])
 def list_deployments():
     return store.list_all()
+
+
+class EnvironmentSelectionRequest(BaseModel):
+    instance_url: str
+
+
+@router.post("/{deployment_id}/select-environment", status_code=200)
+def select_environment(deployment_id: str, body: EnvironmentSelectionRequest):
+    """
+    Called by the wizard when the user picks a Power Platform environment from the
+    dropdown shown during the AWAITING_ENVIRONMENT_SELECTION phase.
+    Unblocks the deployment background thread so it can proceed with PAC CLI auth.
+    """
+    record = store.get(deployment_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+    if record.status != DeploymentStatus.AWAITING_ENVIRONMENT_SELECTION:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Deployment is not awaiting environment selection (status: {record.status})"
+        )
+    if not body.instance_url:
+        raise HTTPException(status_code=400, detail="instance_url is required")
+
+    woken = store.set_env_selection(deployment_id, body.instance_url.rstrip("/"))
+    if not woken:
+        raise HTTPException(
+            status_code=409,
+            detail="No deployment thread is waiting for environment selection. It may have timed out."
+        )
+
+    logger.info(
+        "Environment selected for deployment %s: %s", deployment_id, body.instance_url
+    )
+    return {"status": "ok", "instance_url": body.instance_url}
+

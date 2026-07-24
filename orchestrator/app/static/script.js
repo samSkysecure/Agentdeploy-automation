@@ -320,12 +320,9 @@ document.addEventListener("DOMContentLoaded", () => {
         btnFetchRgs.addEventListener("click", fetchResourceGroups);
     }
 
-    // ---------------------------------------------------------------------
-    // Step 5: Power Platform Environment ID - manual entry only.
-    // (Pre-deployment auto-discovery via device code removed; the mid-
-    // deployment device-code popup further below, driven by
-    // record.status === "awaiting_user_device_auth", is unchanged and is
-    // the only device-code flow left in this UI.)
+    // Step 5: Power Platform environment is now auto-discovered mid-deployment.
+    // No manual environment ID field — the wizard will show a dropdown in the
+    // auth modal if multiple environments are found and none can be auto-selected.
     // ---------------------------------------------------------------------
 
     form.addEventListener("submit", async (e) => {
@@ -405,7 +402,8 @@ document.addEventListener("DOMContentLoaded", () => {
             bot_display_name: botName,
             deployment_spn_object_id_in_customer_tenant: deploymentSpnObjectId,
             power_platform_tenant_id: "547b64a7-e66e-48df-a146-3e898cbcb60f",
-            environment_id: document.getElementById("environmentId").value.trim(),
+            // environment_id is intentionally omitted — the orchestrator auto-discovers
+            // Power Platform environments after the device-code login step.
             solution_zip_path: solutionZip,
             connector_solution_zip_path: connectorZip,
         };
@@ -434,6 +432,11 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     const authModal = document.getElementById("auth-modal");
+    const authModalTitle = document.getElementById("auth-modal-title");
+    const deviceCodeSection = document.getElementById("device-code-section");
+    const envSelectionSection = document.getElementById("env-selection-section");
+    const ppEnvSelect = document.getElementById("pp-env-select");
+    const btnConfirmEnv = document.getElementById("btn-confirm-env");
     const deviceCodeText = document.getElementById("device-code-text");
     const deviceCodeLink = document.getElementById("device-code-link");
     const deviceCodeContext = document.getElementById("device-code-context");
@@ -447,6 +450,44 @@ document.addEventListener("DOMContentLoaded", () => {
                 navigator.clipboard.writeText(code);
                 copyDeviceCodeBtn.textContent = "Copied!";
                 setTimeout(() => copyDeviceCodeBtn.textContent = "Copy", 2000);
+            }
+        });
+    }
+
+    // Enable the "Continue" button only when the user picks a real environment
+    if (ppEnvSelect) {
+        ppEnvSelect.addEventListener("change", () => {
+            if (btnConfirmEnv) btnConfirmEnv.disabled = !ppEnvSelect.value;
+        });
+    }
+
+    // Wire up the "Continue Deployment" button in the environment selection section
+    if (btnConfirmEnv) {
+        btnConfirmEnv.addEventListener("click", async () => {
+            const instanceUrl = ppEnvSelect ? ppEnvSelect.value : "";
+            if (!instanceUrl || !currentDeploymentId) return;
+
+            btnConfirmEnv.disabled = true;
+            btnConfirmEnv.textContent = "Submitting...";
+            try {
+                const res = await fetch(`/deployments/${currentDeploymentId}/select-environment`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ instance_url: instanceUrl }),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    appendLog(`Failed to submit environment selection: ${err.detail || res.statusText}`, "error");
+                    btnConfirmEnv.disabled = false;
+                    btnConfirmEnv.textContent = "Continue Deployment";
+                } else {
+                    appendLog(`Power Platform environment selected: ${instanceUrl}`, "system");
+                    authModal.classList.add("hidden");
+                }
+            } catch (err) {
+                appendLog(`Error submitting environment: ${err.message}`, "error");
+                btnConfirmEnv.disabled = false;
+                btnConfirmEnv.textContent = "Continue Deployment";
             }
         });
     }
@@ -487,6 +528,10 @@ document.addEventListener("DOMContentLoaded", () => {
                     const info = record.device_code_info;
                     const codeKey = `${info.purpose}:${info.user_code}`;
                     if (codeKey !== lastDeviceCodeShown) {
+                        // Show device-code section, hide env-selection section
+                        if (deviceCodeSection) deviceCodeSection.classList.remove("hidden");
+                        if (envSelectionSection) envSelectionSection.classList.add("hidden");
+                        if (authModalTitle) authModalTitle.textContent = "Action Required";
                         deviceCodeText.textContent = info.user_code;
                         deviceCodeLink.href = info.verification_uri;
                         deviceCodeContext.textContent = info.purpose === "pac_auth"
@@ -496,8 +541,29 @@ document.addEventListener("DOMContentLoaded", () => {
                         appendLog(`Waiting for login: ${info.user_code} at ${info.verification_uri}`, "system");
                         lastDeviceCodeShown = codeKey;
                     }
-                } else if (!authModal.classList.contains("hidden")) {
+                } else if (record.status === "awaiting_environment_selection" && record.available_pp_environments) {
+                    // Switch the same modal to show the environment picker
+                    if (deviceCodeSection) deviceCodeSection.classList.add("hidden");
+                    if (envSelectionSection) envSelectionSection.classList.remove("hidden");
+                    if (authModalTitle) authModalTitle.textContent = "Select Power Platform Environment";
+
+                    // Populate the dropdown once (only if not already populated for this deployment)
+                    if (ppEnvSelect && ppEnvSelect.options.length <= 1) {
+                        const envs = record.available_pp_environments;
+                        ppEnvSelect.innerHTML = '<option value="">-- Select an environment --</option>' +
+                            envs.map(e =>
+                                `<option value="${e.instanceUrl}">${e.displayName} (${e.environmentSku})</option>`
+                            ).join("");
+                        if (btnConfirmEnv) btnConfirmEnv.disabled = true;
+                    }
+                    authModal.classList.remove("hidden");
+                } else if (!authModal.classList.contains("hidden") &&
+                           record.status !== "awaiting_user_device_auth" &&
+                           record.status !== "awaiting_environment_selection") {
                     authModal.classList.add("hidden");
+                    // Reset env dropdown for next use
+                    if (ppEnvSelect) ppEnvSelect.innerHTML = '<option value="">-- Select an environment --</option>';
+                    if (btnConfirmEnv) { btnConfirmEnv.disabled = true; btnConfirmEnv.textContent = "Continue Deployment"; }
                 }
 
                 if (record.status === "succeeded") {

@@ -383,6 +383,105 @@ def _step_teardown_deployment_spn(
 # copilot_studio_service.py's module docstring.
 # ---------------------------------------------------------------------------
 
+def _fetch_usable_pp_environments(user_token: str) -> list[dict]:
+    """
+    Fetches Power Platform environments accessible with the given user token
+    and filters to only those that are usable (Enabled, Ready, have an instanceUrl).
+    Returns a list of dicts with keys: displayName, instanceUrl, environmentSku, id.
+    """
+    resp = httpx.get(
+        "https://api.powerapps.com/providers/Microsoft.PowerApps/environments?api-version=2020-06-01",
+        headers={"Authorization": f"Bearer {user_token}"},
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        raise CopilotStudioImportError(
+            f"Failed to list Power Platform environments: {resp.status_code} {resp.text}"
+        )
+
+    usable = []
+    for env in resp.json().get("value", []):
+        props = env.get("properties", {})
+        linked_meta = props.get("linkedEnvironmentMetadata")
+        if not linked_meta or not isinstance(linked_meta, dict):
+            continue
+        instance_url = linked_meta.get("instanceUrl")
+        if not instance_url or not str(instance_url).strip():
+            continue
+        if props.get("states", {}).get("runtime", {}).get("id") != "Enabled":
+            continue
+        if linked_meta.get("instanceState") != "Ready":
+            continue
+        usable.append({
+            "displayName": props.get("displayName") or env.get("name"),
+            "instanceUrl": instance_url.rstrip("/"),
+            "environmentSku": props.get("environmentSku", "Unknown"),
+            "id": env.get("name"),
+        })
+    return usable
+
+
+def _select_pp_environment(record: DeploymentRecord, user_token: str) -> str:
+    """
+    Discovers available Power Platform environments and returns the selected
+    instance URL, either automatically (if one Production env or only one env
+    exists) or by waiting for the user to pick from a dropdown in the wizard UI.
+
+    When user interaction is needed:
+      1. Stores the list in record.available_pp_environments
+      2. Sets record.status = AWAITING_ENVIRONMENT_SELECTION
+      3. Blocks on store.wait_for_env_selection() (threading.Event)
+      4. The /deployments/{id}/select-environment endpoint unblocks this thread
+         when the user submits their choice.
+    """
+    from app.services.deployment_store import store
+
+    usable_envs = _fetch_usable_pp_environments(user_token)
+    if not usable_envs:
+        raise CopilotStudioImportError(
+            "No usable Power Platform environments found for this account. "
+            "Ensure the logged-in user has access to at least one active, "
+            "Dataverse-enabled Power Platform environment."
+        )
+
+    # Auto-selection: Production first, then single-env fallback.
+    prod_env = next((e for e in usable_envs if e["environmentSku"].lower() == "production"), None)
+    if prod_env:
+        logger.info(
+            "Auto-selected Production Power Platform environment: %s (%s)",
+            prod_env["displayName"], prod_env["instanceUrl"]
+        )
+        return prod_env["instanceUrl"]
+
+    if len(usable_envs) == 1:
+        env = usable_envs[0]
+        logger.info(
+            "Only one usable PP environment found, auto-selecting: %s (%s)",
+            env["displayName"], env["instanceUrl"]
+        )
+        return env["instanceUrl"]
+
+    # Multiple environments with no Production — pause and ask the user.
+    logger.info(
+        "Multiple PP environments found (%d), awaiting user selection.", len(usable_envs)
+    )
+    record.available_pp_environments = usable_envs
+    record.status = DeploymentStatus.AWAITING_ENVIRONMENT_SELECTION
+    store.create_env_selection_event(record.deployment_id)
+
+    selected_url = store.wait_for_env_selection(record.deployment_id, timeout=600.0)
+
+    record.available_pp_environments = None  # clear — selection is done
+    if not selected_url:
+        raise CopilotStudioImportError(
+            "Timed out waiting for Power Platform environment selection (10 min). "
+            "Please restart the deployment and select an environment when prompted."
+        )
+
+    logger.info("User selected PP environment: %s", selected_url)
+    return selected_url
+
+
 def _step_import_copilot_studio_solution(
     record: DeploymentRecord,
     req,
@@ -427,11 +526,35 @@ def _step_import_copilot_studio_solution(
         work_dir=work_dir,
     )
 
-    # --- Step 4: Authenticate PAC CLI silently using the deployment SPN (no device code needed) ---
-    # PAC CLI must authenticate against the Power Platform tenant (Skysecure's own),
-    # NOT the customer's Azure tenant.
+    # --- Step 4: Human device-code login — MOVED FIRST so we have a user token
+    # before PAC CLI auth, enabling auto-discovery of Power Platform environments.
+    # The pipeline pauses here, surfaces a device code + verification URL to the
+    # frontend (via DeploymentRecord.device_code_info), and blocks polling for the
+    # human to complete login in a browser.
+    record.status = DeploymentStatus.AWAITING_USER_DEVICE_AUTH
+    device_code_info = cs.start_device_code_flow(power_platform_tenant_id)
+    record.device_code_info = {
+        "user_code": device_code_info.user_code,
+        "verification_uri": device_code_info.verification_uri,
+        "purpose": "user_token",
+    }
+    user_token = cs.poll_for_user_token(device_code_info, power_platform_tenant_id)
+    record.device_code_info = None
+
+    # --- Step 4b: Discover and select the Power Platform environment.
+    # Uses the freshly-acquired user token to list environments.
+    # Auto-selects Production if available, auto-selects if only one exists,
+    # otherwise pauses again (AWAITING_ENVIRONMENT_SELECTION) for user to pick.
+    record.status = DeploymentStatus.IMPORTING_COPILOT_SOLUTION
+    selected_instance_url = _select_pp_environment(record, user_token)
+    env_guid = cs.resolve_environment_guid(selected_instance_url, user_token)
+    record.power_platform_environment_guid = env_guid
+    record.status = DeploymentStatus.IMPORTING_COPILOT_SOLUTION
+
+    # --- Step 5: Authenticate PAC CLI silently using the deployment SPN.
+    # Now that we know the environment URL, PAC CLI auth targets the correct environment.
     cs.pac_auth_create_spn(
-        environment_id=req.environment_id,
+        environment_id=selected_instance_url,
         tenant_id=power_platform_tenant_id,
         client_id=settings.deployment_spn_client_id,
         client_secret=settings.deployment_spn_secret,
@@ -447,22 +570,7 @@ def _step_import_copilot_studio_solution(
         detail=_timestamp(),
     ))
 
-    # --- Step 5: separate human device-code login for the raw Power Platform REST calls ---
-    record.status = DeploymentStatus.AWAITING_USER_DEVICE_AUTH
-    device_code_info = cs.start_device_code_flow(power_platform_tenant_id)
-    record.device_code_info = {
-        "user_code": device_code_info.user_code,
-        "verification_uri": device_code_info.verification_uri,
-        "purpose": "user_token",
-    }
-    user_token = cs.poll_for_user_token(device_code_info, power_platform_tenant_id)
-    record.device_code_info = None
-
-    record.status = DeploymentStatus.IMPORTING_COPILOT_SOLUTION
-
     settings_json = cs.generate_settings_json(injected_solution_zip, work_dir=work_dir)
-    env_guid = cs.resolve_environment_guid(req.environment_id, user_token)
-    record.power_platform_environment_guid = env_guid
 
     connector_api_name = cs.resolve_custom_connector_api(env_guid, user_token, connector_name_pattern="docgen-20sharepoint-20connector")
     custom_connection_id = cs.create_connection(env_guid, user_token, connector_api_name, "DocGen Custom Connector")
@@ -503,6 +611,7 @@ def _step_import_copilot_studio_solution(
         detail=_timestamp(),
     ))
     logger.info("Copilot Studio solution import complete for %s/%s", req.customer_slug, req.agent_slug)
+
 
 
 # ---------------------------------------------------------------------------
