@@ -13,10 +13,20 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(
     title="Agent Factory - Deployment Orchestrator",
     description="Deploys Teams Bot agents into customer Azure subscriptions (SOP 1)",
     version="0.1.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows Next.js dev server (localhost:3000, etc.)
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(deployments_router)

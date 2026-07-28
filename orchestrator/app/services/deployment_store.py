@@ -26,7 +26,7 @@ class DeploymentStore:
         # environment selection from the API handler back to the blocked background
         # deployment thread waiting in _select_pp_environment().
         self._env_selection_events: dict[str, Event] = {}
-        self._env_selection_results: dict[str, str] = {}
+        self._env_selection_results: dict[str, str | dict] = {}
 
     def save(self, record: DeploymentRecord) -> None:
         with self._lock:
@@ -51,22 +51,22 @@ class DeploymentStore:
         with self._lock:
             self._env_selection_events[deployment_id] = Event()
 
-    def set_env_selection(self, deployment_id: str, instance_url: str) -> bool:
+    def set_env_selection(self, deployment_id: str, selection: str | dict) -> bool:
         """Called by the API endpoint when the user submits their environment
-        selection. Unblocks the waiting deployment thread.
+        selection or creation request. Unblocks the waiting deployment thread.
         Returns True if a waiting thread was found, False if no thread was waiting."""
         with self._lock:
             event = self._env_selection_events.get(deployment_id)
             if not event:
                 return False
-            self._env_selection_results[deployment_id] = instance_url
+            self._env_selection_results[deployment_id] = selection
             event.set()
             return True
 
-    def wait_for_env_selection(self, deployment_id: str, timeout: float = 600.0) -> Optional[str]:
+    def wait_for_env_selection(self, deployment_id: str, timeout: float = 600.0) -> Optional[str | dict]:
         """Blocks the calling (deployment background) thread until the user
-        selects an environment via the wizard or the timeout expires.
-        Returns the selected instance_url, or None on timeout."""
+        selects or creates an environment via the wizard or the timeout expires.
+        Returns the selection payload (instance_url str or new_environment dict), or None on timeout."""
         event: Optional[Event] = None
         with self._lock:
             event = self._env_selection_events.get(deployment_id)

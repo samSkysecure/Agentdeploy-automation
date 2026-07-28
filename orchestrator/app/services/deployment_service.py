@@ -428,61 +428,83 @@ def _select_pp_environment(record: DeploymentRecord, user_token: str) -> str:
     """
     Discovers available Power Platform environments and returns the selected
     instance URL, either automatically (if one Production env or only one env
-    exists) or by waiting for the user to pick from a dropdown in the wizard UI.
+    exists) or by waiting for the user to pick or create an environment in the wizard UI.
 
     When user interaction is needed:
       1. Stores the list in record.available_pp_environments
       2. Sets record.status = AWAITING_ENVIRONMENT_SELECTION
       3. Blocks on store.wait_for_env_selection() (threading.Event)
       4. The /deployments/{id}/select-environment endpoint unblocks this thread
-         when the user submits their choice.
+         when the user submits their choice or environment creation spec.
     """
     from app.services.deployment_store import store
 
     usable_envs = _fetch_usable_pp_environments(user_token)
-    if not usable_envs:
-        raise CopilotStudioImportError(
-            "No usable Power Platform environments found for this account. "
-            "Ensure the logged-in user has access to at least one active, "
-            "Dataverse-enabled Power Platform environment."
-        )
 
-    # Auto-selection: Production first, then single-env fallback.
-    prod_env = next((e for e in usable_envs if e["environmentSku"].lower() == "production"), None)
-    if prod_env:
-        logger.info(
-            "Auto-selected Production Power Platform environment: %s (%s)",
-            prod_env["displayName"], prod_env["instanceUrl"]
-        )
-        return prod_env["instanceUrl"]
+    # If existing usable environments exist:
+    if usable_envs:
+        # Auto-selection: Production first, then single-env fallback.
+        prod_env = next((e for e in usable_envs if e["environmentSku"].lower() == "production"), None)
+        if prod_env:
+            logger.info(
+                "Auto-selected Production Power Platform environment: %s (%s)",
+                prod_env["displayName"], prod_env["instanceUrl"]
+            )
+            return prod_env["instanceUrl"]
 
-    if len(usable_envs) == 1:
-        env = usable_envs[0]
-        logger.info(
-            "Only one usable PP environment found, auto-selecting: %s (%s)",
-            env["displayName"], env["instanceUrl"]
-        )
-        return env["instanceUrl"]
+        if len(usable_envs) == 1:
+            env = usable_envs[0]
+            logger.info(
+                "Only one usable PP environment found, auto-selecting: %s (%s)",
+                env["displayName"], env["instanceUrl"]
+            )
+            return env["instanceUrl"]
 
-    # Multiple environments with no Production — pause and ask the user.
+    # Multiple environments found (or 0 usable environments found) — pause and ask user to pick or create.
     logger.info(
-        "Multiple PP environments found (%d), awaiting user selection.", len(usable_envs)
+        "Found %d usable PP environment(s), awaiting user selection or creation.", len(usable_envs)
     )
     record.available_pp_environments = usable_envs
     record.status = DeploymentStatus.AWAITING_ENVIRONMENT_SELECTION
     store.create_env_selection_event(record.deployment_id)
 
-    selected_url = store.wait_for_env_selection(record.deployment_id, timeout=600.0)
+    selection = store.wait_for_env_selection(record.deployment_id, timeout=600.0)
 
     record.available_pp_environments = None  # clear — selection is done
-    if not selected_url:
+    if not selection:
         raise CopilotStudioImportError(
             "Timed out waiting for Power Platform environment selection (10 min). "
             "Please restart the deployment and select an environment when prompted."
         )
 
+    # Handle creation flow vs existing environment selection
+    if isinstance(selection, dict) and selection.get("create_new"):
+        logger.info(
+            "User requested creation of new Power Platform environment '%s' (%s, %s)...",
+            selection.get("display_name"), selection.get("sku"), selection.get("location")
+        )
+
+        def update_status(msg: str):
+            logger.info("Environment creation update for %s: %s", record.deployment_id, msg)
+            record.status_message = msg
+
+        created_url = cs.create_pp_environment(
+            user_token=user_token,
+            display_name=selection["display_name"],
+            location=selection["location"],
+            sku=selection["sku"],
+            status_callback=update_status,
+        )
+        logger.info("Successfully created and selected new Power Platform environment: %s", created_url)
+        return created_url
+
+    selected_url = str(selection).strip() if isinstance(selection, str) else selection.get("instance_url", "")
+    if not selected_url:
+        raise CopilotStudioImportError("Invalid environment selection received.")
+
     logger.info("User selected PP environment: %s", selected_url)
     return selected_url
+
 
 
 def _step_import_copilot_studio_solution(

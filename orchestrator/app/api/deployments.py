@@ -17,6 +17,7 @@ serve other requests, including status polling, while the deployment runs.
 import asyncio
 import logging
 import uuid
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -69,16 +70,23 @@ def list_deployments():
     return store.list_all()
 
 
+class NewEnvironmentSpec(BaseModel):
+    display_name: str
+    location: str
+    sku: str
+
+
 class EnvironmentSelectionRequest(BaseModel):
-    instance_url: str
+    instance_url: Optional[str] = None
+    new_environment: Optional[NewEnvironmentSpec] = None
 
 
 @router.post("/{deployment_id}/select-environment", status_code=200)
 def select_environment(deployment_id: str, body: EnvironmentSelectionRequest):
     """
-    Called by the wizard when the user picks a Power Platform environment from the
-    dropdown shown during the AWAITING_ENVIRONMENT_SELECTION phase.
-    Unblocks the deployment background thread so it can proceed with PAC CLI auth.
+    Called by the wizard when the user picks an existing Power Platform environment from the
+    dropdown or requests creation of a new environment during AWAITING_ENVIRONMENT_SELECTION phase.
+    Unblocks the deployment background thread so it can proceed.
     """
     record = store.get(deployment_id)
     if record is None:
@@ -88,10 +96,38 @@ def select_environment(deployment_id: str, body: EnvironmentSelectionRequest):
             status_code=409,
             detail=f"Deployment is not awaiting environment selection (status: {record.status})"
         )
-    if not body.instance_url:
-        raise HTTPException(status_code=400, detail="instance_url is required")
 
-    woken = store.set_env_selection(deployment_id, body.instance_url.rstrip("/"))
+    if not body.instance_url and not body.new_environment:
+        raise HTTPException(status_code=400, detail="Either instance_url or new_environment must be provided.")
+
+    if body.instance_url and body.new_environment:
+        raise HTTPException(status_code=400, detail="Cannot provide both instance_url and new_environment.")
+
+    selection: str | dict = ""
+
+    if body.new_environment:
+        spec = body.new_environment
+        if not spec.display_name or not spec.display_name.strip():
+            raise HTTPException(status_code=400, detail="display_name is required for creating a new environment.")
+        if not spec.location or not spec.location.strip():
+            raise HTTPException(status_code=400, detail="location is required for creating a new environment.")
+        if spec.sku not in ("Production", "Sandbox"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid SKU '{spec.sku}'. Allowed values for environment creation are: Production, Sandbox"
+            )
+        selection = {
+            "create_new": True,
+            "display_name": spec.display_name.strip(),
+            "location": spec.location.strip(),
+            "sku": spec.sku,
+        }
+    else:
+        if not body.instance_url or not body.instance_url.strip():
+            raise HTTPException(status_code=400, detail="instance_url is required when choosing an existing environment.")
+        selection = body.instance_url.rstrip("/")
+
+    woken = store.set_env_selection(deployment_id, selection)
     if not woken:
         raise HTTPException(
             status_code=409,
@@ -99,7 +135,8 @@ def select_environment(deployment_id: str, body: EnvironmentSelectionRequest):
         )
 
     logger.info(
-        "Environment selected for deployment %s: %s", deployment_id, body.instance_url
+        "Environment selection submitted for deployment %s: %s", deployment_id, selection
     )
-    return {"status": "ok", "instance_url": body.instance_url}
+    return {"status": "ok", "selection": selection}
+
 

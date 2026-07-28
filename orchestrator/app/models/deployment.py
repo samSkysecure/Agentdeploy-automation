@@ -33,7 +33,7 @@ class DeploymentRequest(BaseModel):
     customer_slug: str = Field(..., description="Short identifier for the customer e.g. 'sstlab'")
     customer_tenant_id: str = Field(..., description="Customer's Entra tenant ID")
     customer_subscription_id: str = Field(..., description="Customer's Azure subscription ID")
-    resource_group_name: str = Field(..., description="Customer's pre-existing resource group e.g. 'soc-agents'")
+    resource_group_name: str = Field(..., description="Name of the resource group to be created e.g. 'rg-skysecure-docgen'")
     agent_image_tag: str = Field(..., description="Image tag to deploy e.g. 'v1'")
     bot_display_name: str = Field(..., description="Human-readable bot name shown in Teams")
     location: Optional[str] = Field(None, description="Azure region override; defaults to Settings.default_location")

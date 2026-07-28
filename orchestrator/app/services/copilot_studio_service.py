@@ -486,3 +486,146 @@ def fetch_flow_webhook_url(env_guid: str, user_token: str, flow_name_pattern: st
     if not webhook_url:
         logger.warning("Flow webhook URL came back empty: %s", body)
     return webhook_url
+
+
+def create_pp_environment(
+    user_token: str,
+    display_name: str,
+    location: str,
+    sku: str,
+    currency: str = "USD",
+    language_code: int = 1033,
+    status_callback: Optional[Callable[[str], None]] = None,
+) -> str:
+    """
+    Creates a new Power Platform environment via the Microsoft BAP API:
+    POST https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments?api-version=2020-06-01
+
+    Two-stage polling:
+      1. Poll BAP API until provisioningState == 'Succeeded'.
+      2. Poll PowerApps API until Dataverse linkedEnvironmentMetadata.instanceUrl is ready and instanceState == 'Ready'.
+
+    Returns the ready Dataverse instanceUrl.
+    """
+    allowed_skus = {"Production", "Sandbox"}
+    if sku not in allowed_skus:
+        raise CopilotStudioImportError(
+            f"Invalid environment SKU '{sku}'. Allowed values: {', '.join(sorted(allowed_skus))}"
+        )
+
+    if not display_name or not display_name.strip():
+        raise CopilotStudioImportError("Environment display name is required.")
+
+    if not location or not location.strip():
+        raise CopilotStudioImportError("Environment location/region is required.")
+
+    logger.info(
+        "Initiating creation of Power Platform environment '%s' (SKU: %s, Location: %s)...",
+        display_name, sku, location
+    )
+
+    url = "https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments?api-version=2020-06-01"
+    headers = {
+        "Authorization": f"Bearer {user_token}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "location": location.strip(),
+        "properties": {
+            "displayName": display_name.strip(),
+            "environmentSku": sku,
+            "databaseCreationProperties": {
+                "currency": {"code": currency},
+                "language": {"code": language_code},
+            },
+        },
+    }
+
+    resp = httpx.post(url, headers=headers, json=payload, timeout=45)
+    if resp.status_code not in (200, 201, 202):
+        err_msg = resp.text
+        try:
+            err_json = resp.json()
+            err_msg = err_json.get("error", {}).get("message") or err_json.get("message") or resp.text
+        except Exception:
+            pass
+        raise CopilotStudioImportError(
+            f"Failed to create Power Platform environment (HTTP {resp.status_code}): {err_msg}"
+        )
+
+    env_body = resp.json()
+    env_name = env_body.get("name")
+    if not env_name:
+        raise CopilotStudioImportError(f"Environment creation response missing 'name': {env_body}")
+
+    logger.info("Environment shell created with ID: %s. Stage 1: Polling shell provisioningState...", env_name)
+    if status_callback:
+        status_callback("Creating Power Platform environment shell...")
+
+    _poll_environment_shell_ready(user_token, env_name, timeout=600.0)
+
+    logger.info("Stage 1 completed (provisioningState == Succeeded). Stage 2: Polling Dataverse instance readiness...", env_name)
+    if status_callback:
+        status_callback("Provisioning Dataverse database instance...")
+
+    instance_url = _poll_dataverse_instance_ready(user_token, env_name, timeout=600.0)
+    logger.info("Stage 2 completed. Environment '%s' (%s) is fully ready: %s", display_name, env_name, instance_url)
+    return instance_url
+
+
+def _poll_environment_shell_ready(user_token: str, env_name: str, timeout: float = 600.0) -> None:
+    """Stage 1 poll: Waits until BAP API reports provisioningState == 'Succeeded'."""
+    url = f"https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments/{env_name}?api-version=2020-06-01"
+    headers = {"Authorization": f"Bearer {user_token}"}
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            resp = httpx.get(url, headers=headers, timeout=30)
+            if resp.status_code == 200:
+                body = resp.json()
+                props = body.get("properties", {})
+                prov_state = props.get("provisioningState")
+                logger.info("Poll Stage 1 (shell) for %s: provisioningState = %s", env_name, prov_state)
+                if prov_state == "Succeeded":
+                    return
+                elif prov_state in ("Failed", "Canceled"):
+                    err_details = props.get("provisioningDetails") or body
+                    raise CopilotStudioImportError(f"Environment provisioning failed: {err_details}")
+        except CopilotStudioImportError:
+            raise
+        except Exception as e:
+            logger.warning("Transient error polling shell state for %s: %s", env_name, e)
+
+        time.sleep(10)
+
+    raise CopilotStudioImportError(f"Timed out after {int(timeout)}s waiting for environment shell provisioning to succeed.")
+
+
+def _poll_dataverse_instance_ready(user_token: str, env_name: str, timeout: float = 600.0) -> str:
+    """Stage 2 poll: Waits until PowerApps API reports Dataverse linkedEnvironmentMetadata instanceState == 'Ready' and provides instanceUrl."""
+    url = f"https://api.powerapps.com/providers/Microsoft.PowerApps/environments/{env_name}?api-version=2020-06-01"
+    headers = {"Authorization": f"Bearer {user_token}"}
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            resp = httpx.get(url, headers=headers, timeout=30)
+            if resp.status_code == 200:
+                body = resp.json()
+                props = body.get("properties", {})
+                linked_meta = props.get("linkedEnvironmentMetadata") or {}
+                inst_state = linked_meta.get("instanceState")
+                inst_url = linked_meta.get("instanceUrl")
+                logger.info("Poll Stage 2 (Dataverse) for %s: instanceState = %s, instanceUrl = %s", env_name, inst_state, inst_url)
+                if inst_state == "Ready" and inst_url and str(inst_url).strip():
+                    return str(inst_url).rstrip("/")
+        except CopilotStudioImportError:
+            raise
+        except Exception as e:
+            logger.warning("Transient error polling Dataverse readiness for %s: %s", env_name, e)
+
+        time.sleep(10)
+
+    raise CopilotStudioImportError(f"Timed out after {int(timeout)}s waiting for Dataverse instance to become Ready.")
+

@@ -266,59 +266,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // ---------------------------------------------------------------------
-    // Step 5: Resource Group selection & Deployment
+    // Step 5: Deployment
     // ---------------------------------------------------------------------
-    const resourceGroupSelect = document.getElementById("resourceGroupSelect");
-    const newResourceGroupInput = document.getElementById("newResourceGroupInput");
-    const btnFetchRgs = document.getElementById("btn-fetch-rgs");
-
-    if (resourceGroupSelect) {
-        resourceGroupSelect.addEventListener("change", () => {
-            if (resourceGroupSelect.value === "__NEW__") {
-                newResourceGroupInput.classList.remove("hidden");
-                newResourceGroupInput.required = true;
-            } else {
-                newResourceGroupInput.classList.add("hidden");
-                newResourceGroupInput.required = false;
-            }
-        });
-    }
-
-    async function fetchResourceGroups() {
-        const tenantId = resolvedTenantId || tenantIdInput.value.trim();
-        const subId = assignRoleSubscriptionIdInput.value.trim() || (subscriptionSelect ? subscriptionSelect.value : "");
-        if (!tenantId || !subId) {
-            alert("Please complete Steps 2–4 first (resolve tenant, complete Lighthouse, and select a subscription).");
-            return;
-        }
-        btnFetchRgs.disabled = true;
-        btnFetchRgs.textContent = "Fetching...";
-        try {
-            const res = await fetch(`/api/azure/resource-groups?tenant_id=${tenantId}&subscription_id=${subId}`);
-            if (!res.ok) {
-                const errorData = await res.json().catch(() => ({}));
-                throw new Error(errorData.detail || "Could not fetch resource groups. Ensure Lighthouse delegation (Step 3) has been completed.");
-            }
-            const rgs = await res.json();
-            resourceGroupSelect.innerHTML = '<option value="__NEW__">+ Create New Resource Group</option>';
-            rgs.forEach(rg => {
-                const opt = document.createElement("option");
-                opt.value = rg;
-                opt.textContent = rg;
-                resourceGroupSelect.appendChild(opt);
-            });
-            appendLog(`Loaded ${rgs.length} existing resource group(s) from subscription.`, "system");
-        } catch (err) {
-            appendLog(`Resource group lookup: ${err.message}`, "warn");
-        } finally {
-            btnFetchRgs.disabled = false;
-            btnFetchRgs.textContent = "Fetch Existing";
-        }
-    }
-
-    if (btnFetchRgs) {
-        btnFetchRgs.addEventListener("click", fetchResourceGroups);
-    }
 
     // Step 5: Power Platform environment is now auto-discovered mid-deployment.
     // No manual environment ID field — the wizard will show a dropdown in the
@@ -343,18 +292,6 @@ document.addEventListener("DOMContentLoaded", () => {
         const subscriptionId = assignRoleSubscriptionIdInput.value.trim() || (subscriptionSelect ? subscriptionSelect.value : "");
         if (!subscriptionId) {
             appendLog("Subscription ID is required (Step 4). Complete Lighthouse delegation (Step 3) and refresh subscriptions.", "error");
-            resetUI();
-            return;
-        }
-
-        // Determine resource group name (selected existing or newly typed)
-        const selectedRgOption = resourceGroupSelect ? resourceGroupSelect.value : "__NEW__";
-        const resourceGroupName = selectedRgOption === "__NEW__"
-            ? newResourceGroupInput.value.trim()
-            : selectedRgOption;
-
-        if (!resourceGroupName) {
-            appendLog("Resource Group Name is required.", "error");
             resetUI();
             return;
         }
@@ -385,6 +322,7 @@ document.addEventListener("DOMContentLoaded", () => {
         let solutionZip = "../Docgen_hybrid_1_0_0_1.zip";
         let connectorZip = "../doc_gen_hybrid_connectors_1_0_0_1_managed.zip";
         let botName = "Skysecure Document Generation Agent";
+        let resourceGroupName = `rg-${CUSTOMER_SLUG}-${selectedAgentSlug}`;
 
         if (selectedAgentSlug === "teamsagent") {
             solutionZip = "../docgen_1_0_0_2.zip";
@@ -435,6 +373,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const deviceCodeSection = document.getElementById("device-code-section");
     const envSelectionSection = document.getElementById("env-selection-section");
     const ppEnvSelect = document.getElementById("pp-env-select");
+    const createEnvForm = document.getElementById("create-env-form");
+    const newEnvNameInput = document.getElementById("new-env-name");
+    const newEnvLocationSelect = document.getElementById("new-env-location");
+    const newEnvSkuSelect = document.getElementById("new-env-sku");
     const btnConfirmEnv = document.getElementById("btn-confirm-env");
     const deviceCodeText = document.getElementById("device-code-text");
     const deviceCodeLink = document.getElementById("device-code-link");
@@ -453,18 +395,58 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
-    // Enable the "Continue" button only when the user picks a real environment
+    function validateEnvSelection() {
+        if (!btnConfirmEnv || !ppEnvSelect) return;
+        if (ppEnvSelect.value === "__CREATE_NEW__") {
+            const nameVal = newEnvNameInput ? newEnvNameInput.value.trim() : "";
+            btnConfirmEnv.disabled = !nameVal;
+        } else {
+            btnConfirmEnv.disabled = !ppEnvSelect.value;
+        }
+    }
+
     if (ppEnvSelect) {
         ppEnvSelect.addEventListener("change", () => {
-            if (btnConfirmEnv) btnConfirmEnv.disabled = !ppEnvSelect.value;
+            if (ppEnvSelect.value === "__CREATE_NEW__") {
+                if (createEnvForm) createEnvForm.classList.remove("hidden");
+            } else {
+                if (createEnvForm) createEnvForm.classList.add("hidden");
+            }
+            validateEnvSelection();
         });
+    }
+
+    if (newEnvNameInput) {
+        newEnvNameInput.addEventListener("input", validateEnvSelection);
     }
 
     // Wire up the "Continue Deployment" button in the environment selection section
     if (btnConfirmEnv) {
         btnConfirmEnv.addEventListener("click", async () => {
-            const instanceUrl = ppEnvSelect ? ppEnvSelect.value : "";
-            if (!instanceUrl || !currentDeploymentId) return;
+            const selectVal = ppEnvSelect ? ppEnvSelect.value : "";
+            if (!selectVal || !currentDeploymentId) return;
+
+            let payload = {};
+            if (selectVal === "__CREATE_NEW__") {
+                const nameVal = newEnvNameInput ? newEnvNameInput.value.trim() : "";
+                const locVal = newEnvLocationSelect ? newEnvLocationSelect.value : "unitedstates";
+                const skuVal = newEnvSkuSelect ? newEnvSkuSelect.value : "Production";
+
+                if (!nameVal) {
+                    appendLog("Environment name is required for creating a new environment.", "error");
+                    return;
+                }
+
+                payload = {
+                    new_environment: {
+                        display_name: nameVal,
+                        location: locVal,
+                        sku: skuVal
+                    }
+                };
+            } else {
+                payload = { instance_url: selectVal };
+            }
 
             btnConfirmEnv.disabled = true;
             btnConfirmEnv.textContent = "Submitting...";
@@ -472,19 +454,23 @@ document.addEventListener("DOMContentLoaded", () => {
                 const res = await fetch(`/deployments/${currentDeploymentId}/select-environment`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ instance_url: instanceUrl }),
+                    body: JSON.stringify(payload),
                 });
                 if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
-                    appendLog(`Failed to submit environment selection: ${err.detail || res.statusText}`, "error");
+                    appendLog(`Failed to submit environment choice: ${err.detail || res.statusText}`, "error");
                     btnConfirmEnv.disabled = false;
                     btnConfirmEnv.textContent = "Continue Deployment";
                 } else {
-                    appendLog(`Power Platform environment selected: ${instanceUrl}`, "system");
+                    if (selectVal === "__CREATE_NEW__") {
+                        appendLog("Environment creation submitted. Initiating Stage 1 (shell creation)...", "system");
+                    } else {
+                        appendLog(`Power Platform environment selected: ${selectVal}`, "system");
+                    }
                     authModal.classList.add("hidden");
                 }
             } catch (err) {
-                appendLog(`Error submitting environment: ${err.message}`, "error");
+                appendLog(`Error submitting environment choice: ${err.message}`, "error");
                 btnConfirmEnv.disabled = false;
                 btnConfirmEnv.textContent = "Continue Deployment";
             }
@@ -493,6 +479,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     let lastSeenStepCount = 0;
     let lastSeenStatus = null;
+    let lastSeenStatusMessage = null;
 
     function pollDeployment(deploymentId) {
         pollTimer = setInterval(async () => {
@@ -507,6 +494,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (record.status !== lastSeenStatus) {
                     appendLog(`Status: ${record.status}`, "system");
                     lastSeenStatus = record.status;
+                }
+
+                if (record.status_message && record.status_message !== lastSeenStatusMessage) {
+                    appendLog(`ℹ ${record.status_message}`, "system");
+                    lastSeenStatusMessage = record.status_message;
                 }
 
                 const steps = record.steps || [];
@@ -544,28 +536,49 @@ document.addEventListener("DOMContentLoaded", () => {
                         appendLog(`Waiting for login: ${info.user_code} at ${info.verification_uri}`, "system");
                         lastDeviceCodeShown = codeKey;
                     }
-                } else if (record.status === "awaiting_environment_selection" && record.available_pp_environments) {
-                    // Switch the same modal to show the environment picker
+                } else if (record.status === "awaiting_environment_selection" && record.available_pp_environments !== undefined) {
+                    // Switch modal to show environment picker + creation option
                     if (deviceCodeSection) deviceCodeSection.classList.add("hidden");
                     if (envSelectionSection) envSelectionSection.classList.remove("hidden");
-                    if (authModalTitle) authModalTitle.textContent = "Select Power Platform Environment";
- 
-                    // Populate the dropdown once (only if not already populated for this deployment)
-                    if (ppEnvSelect && ppEnvSelect.options.length <= 1) {
-                        const envs = record.available_pp_environments;
+                    if (authModalTitle) authModalTitle.textContent = "Select or Create Power Platform Environment";
+
+                    // Populate dropdown if not already populated for this deployment ID
+                    if (ppEnvSelect && ppEnvSelect.getAttribute("data-dep-id") !== deploymentId) {
+                        ppEnvSelect.setAttribute("data-dep-id", deploymentId);
+                        const envs = record.available_pp_environments || [];
                         ppEnvSelect.innerHTML = '<option value="">-- Select an environment --</option>' +
+                            '<option value="__CREATE_NEW__">+ Create New Environment</option>' +
                             envs.map(e =>
                                 `<option value="${e.instanceUrl}">${e.displayName} (${e.environmentSku})</option>`
                             ).join("");
+
+                        if (createEnvForm) createEnvForm.classList.add("hidden");
+                        if (newEnvNameInput) newEnvNameInput.value = "";
                         if (btnConfirmEnv) btnConfirmEnv.disabled = true;
+
+                        // Auto-select location dropdown default based on subscription if possible
+                        if (newEnvLocationSelect) {
+                            const subText = (subscriptionSelect ? subscriptionSelect.value : "").toLowerCase();
+                            if (subText.includes("india")) newEnvLocationSelect.value = "india";
+                            else if (subText.includes("europe")) newEnvLocationSelect.value = "europe";
+                            else if (subText.includes("asia")) newEnvLocationSelect.value = "asia";
+                            else if (subText.includes("australia")) newEnvLocationSelect.value = "australia";
+                            else if (subText.includes("uk") || subText.includes("unitedkingdom")) newEnvLocationSelect.value = "unitedkingdom";
+                            else if (subText.includes("canada")) newEnvLocationSelect.value = "canada";
+                            else if (subText.includes("japan")) newEnvLocationSelect.value = "japan";
+                            else newEnvLocationSelect.value = "unitedstates";
+                        }
                     }
                     authModal.classList.remove("hidden");
                 } else if (!authModal.classList.contains("hidden") &&
                            (record.status !== "awaiting_user_device_auth" || !record.device_code_info) &&
                            record.status !== "awaiting_environment_selection") {
                     authModal.classList.add("hidden");
-                    // Reset env dropdown for next use
-                    if (ppEnvSelect) ppEnvSelect.innerHTML = '<option value="">-- Select an environment --</option>';
+                    if (ppEnvSelect) {
+                        ppEnvSelect.removeAttribute("data-dep-id");
+                        ppEnvSelect.innerHTML = '<option value="">-- Select an environment --</option>';
+                    }
+                    if (createEnvForm) createEnvForm.classList.add("hidden");
                     if (btnConfirmEnv) { btnConfirmEnv.disabled = true; btnConfirmEnv.textContent = "Continue Deployment"; }
                 }
 
@@ -583,6 +596,11 @@ document.addEventListener("DOMContentLoaded", () => {
                         catalogDetail.textContent = record.catalog_teams_app_id
                             ? `Catalog Teams App ID: ${record.catalog_teams_app_id}`
                             : "Publish status unavailable - check deployment steps below or download the zip and upload manually.";
+                    }
+
+                    const teamsAdminBtn = document.getElementById("teams-admin-portal-btn");
+                    if (teamsAdminBtn) {
+                        teamsAdminBtn.href = "https://admin.teams.microsoft.com/policies/manage-apps";
                     }
                     
                     // Check if sharepoint site URL is in steps
