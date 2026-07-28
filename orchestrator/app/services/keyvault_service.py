@@ -71,6 +71,7 @@ def store_agent_secret_in_customer_keyvault(
     customer_slug: str,
     agent_slug: str,
     agent_app_client_secret: str,
+    deployment_spn_object_id: str = "",
 ) -> KeyVaultResult:
     credential = ClientSecretCredential(
         tenant_id=deployment_spn_tenant_id,
@@ -83,10 +84,10 @@ def store_agent_secret_in_customer_keyvault(
     kv_mgmt_client = KeyVaultManagementClient(credential, customer_subscription_id)
     logger.info("Creating/ensuring Key Vault '%s' in %s/%s", vault_name, customer_subscription_id, customer_resource_group)
 
-    sp_object_ids = [
-        "3ac971a6-7eac-4e24-9eab-a0fc0c39e886",
-        "001ff798-8ad6-4860-a631-ca2c300fc44e",
-    ]
+    sp_object_ids = []
+    if deployment_spn_object_id:
+        sp_object_ids.append(deployment_spn_object_id)
+
     access_policies = [
         AccessPolicyEntry(
             tenant_id=customer_tenant_id,

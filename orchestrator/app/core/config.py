@@ -60,8 +60,8 @@ class Settings(BaseSettings):
     # app registration, which persists across deployments as expected.
     deployment_spn_client_id: str = Field("", validation_alias=AliasChoices("DEPLOYMENT_SPN_CLIENT_ID", "SKYSECURE_APP_ID"))
     deployment_spn_secret: str = Field("", validation_alias=AliasChoices("DEPLOYMENT_SPN_SECRET", "SKYSECURE_APP_SECRET"))
-    deployment_spn_tenant_id: str = Field("547b64a7-e66e-48df-a146-3e898cbcb60f", validation_alias=AliasChoices("DEPLOYMENT_SPN_TENANT_ID", "SKYSECURE_TENANT_ID"))
-    power_platform_tenant_id: str = Field("547b64a7-e66e-48df-a146-3e898cbcb60f", validation_alias=AliasChoices("POWER_PLATFORM_TENANT_ID", "DEPLOYMENT_SPN_TENANT_ID", "SKYSECURE_TENANT_ID"))
+    deployment_spn_tenant_id: str = Field("", validation_alias=AliasChoices("DEPLOYMENT_SPN_TENANT_ID", "SKYSECURE_TENANT_ID"))
+    power_platform_tenant_id: str = Field("", validation_alias=AliasChoices("POWER_PLATFORM_TENANT_ID"))
     # Object ID of the deployment SPN's Service Principal *in Skysecure's own
     # home tenant* - unrelated to per-customer teardown, kept for reference only.
     deployment_spn_home_object_id: str = Field("", validation_alias=AliasChoices("DEPLOYMENT_SPN_HOME_OBJECT_ID", "SKYSECURE_SPN_OBJECT_ID"))
@@ -76,6 +76,7 @@ class Settings(BaseSettings):
     source_acr_subscription_id: str = "f88ce874-1ee3-4ce7-83ea-d50fa028869d"
     source_acr_username: str = Field("", validation_alias=AliasChoices("SOURCE_ACR_USERNAME", "COPILOT_ACR_USERNAME"))
     source_acr_password: str = Field("", validation_alias=AliasChoices("SOURCE_ACR_PASSWORD", "COPILOT_ACR_PASSWORD"))
+    source_acr_repository: str = Field("", validation_alias=AliasChoices("SOURCE_ACR_REPOSITORY", "COPILOT_ACR_REPOSITORY"))
 
     # Azure OpenAI - shared across all SOP 1 customers
     # Not used by SOP 5 (Copilot Studio provides the LLM)

@@ -401,7 +401,6 @@ document.addEventListener("DOMContentLoaded", () => {
             agent_image_tag: "v1",
             bot_display_name: botName,
             deployment_spn_object_id_in_customer_tenant: deploymentSpnObjectId,
-            power_platform_tenant_id: "547b64a7-e66e-48df-a146-3e898cbcb60f",
             // environment_id is intentionally omitted — the orchestrator auto-discovers
             // Power Platform environments after the device-code login step.
             solution_zip_path: solutionZip,
@@ -534,9 +533,13 @@ document.addEventListener("DOMContentLoaded", () => {
                         if (authModalTitle) authModalTitle.textContent = "Action Required";
                         deviceCodeText.textContent = info.user_code;
                         deviceCodeLink.href = info.verification_uri;
-                        deviceCodeContext.textContent = info.purpose === "pac_auth"
-                            ? "PAC CLI needs a one-time login to import the solution."
-                            : "Power Platform needs a one-time login to create connections.";
+                        if (info.purpose === "pac_auth") {
+                            deviceCodeContext.textContent = "PAC CLI needs a one-time login to import the solution.";
+                        } else if (info.purpose === "graph_auth") {
+                            deviceCodeContext.textContent = "Teams Admin Catalog needs a one-time login to upload the manifest.";
+                        } else {
+                            deviceCodeContext.textContent = "Power Platform needs a one-time login to create connections.";
+                        }
                         authModal.classList.remove("hidden");
                         appendLog(`Waiting for login: ${info.user_code} at ${info.verification_uri}`, "system");
                         lastDeviceCodeShown = codeKey;
@@ -546,7 +549,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     if (deviceCodeSection) deviceCodeSection.classList.add("hidden");
                     if (envSelectionSection) envSelectionSection.classList.remove("hidden");
                     if (authModalTitle) authModalTitle.textContent = "Select Power Platform Environment";
-
+ 
                     // Populate the dropdown once (only if not already populated for this deployment)
                     if (ppEnvSelect && ppEnvSelect.options.length <= 1) {
                         const envs = record.available_pp_environments;
@@ -558,7 +561,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     }
                     authModal.classList.remove("hidden");
                 } else if (!authModal.classList.contains("hidden") &&
-                           record.status !== "awaiting_user_device_auth" &&
+                           (record.status !== "awaiting_user_device_auth" || !record.device_code_info) &&
                            record.status !== "awaiting_environment_selection") {
                     authModal.classList.add("hidden");
                     // Reset env dropdown for next use

@@ -25,7 +25,7 @@ def _base_manifest(settings: Settings) -> dict:
     return {
         "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.26/MicrosoftTeams.schema.json",
         "manifestVersion": "1.26",
-        "version": "1.0.0",
+        "version": "1.0.3",
         "supportsChannelFeatures": "tier1",
         "id": None,
         "developer": {
@@ -48,8 +48,8 @@ def _base_manifest(settings: Settings) -> dict:
                     {
                         "scopes": ["personal", "copilot"],
                         "commands": [
-                            {"title": "How can you help me?", "description": "How can you help me?"},
-                            {"title": "What can you do?", "description": "What are your capabilities?"},
+                            {"title": "Select Template", "description": "Fetch a Word template from SharePoint by typing its name."},
+                            {"title": "Reset Session", "description": "Clear the current session state and start fresh."},
                         ],
                     }
                 ],
@@ -81,15 +81,22 @@ def generate_manifest(
 ) -> dict:
     fqdn = container_app_fqdn.replace("https://", "").replace("http://", "").rstrip("/")
     app_id = teams_app_id or str(uuid.uuid4())
-    display_name = agent_display_name or agent_slug.replace("-", " ")
-    description = agent_description or f"ai-powered agent for {customer_slug}"
+
+    if agent_slug == "docgenhybrid":
+        display_name = agent_display_name or "Skysecure Docgen Agent"
+        short_desc = agent_description or "AI-powered Teams bot for generating and modifying Word documents."
+        full_desc = "SkySecure DocGen is an AI-powered Microsoft Teams assistant that helps users upload Word templates, collect required information conversationally, and generate finalized documents automatically."
+    else:
+        display_name = agent_display_name or agent_slug.replace("-", " ")
+        short_desc = agent_description or f"ai-powered agent for {customer_slug}"
+        full_desc = short_desc
 
     manifest = _base_manifest(settings)
     manifest["id"] = app_id
     manifest["name"]["short"] = display_name
-    manifest["name"]["full"] = f"{display_name} - {customer_slug}"
-    manifest["description"]["short"] = description
-    manifest["description"]["full"] = description
+    manifest["name"]["full"] = display_name
+    manifest["description"]["short"] = short_desc
+    manifest["description"]["full"] = full_desc
     manifest["bots"][0]["botId"] = bot_id
     manifest["copilotAgents"]["customEngineAgents"][0]["id"] = bot_id
     manifest["validDomains"] = [fqdn]

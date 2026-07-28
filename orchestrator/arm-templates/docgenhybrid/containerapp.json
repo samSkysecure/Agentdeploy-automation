@@ -30,13 +30,26 @@
     "customerAcrLoginServer": {
       "type": "string",
       "metadata": {
-        "description": "Customer's OWN ACR login server"
+        "description": "Customer ACR login server"
       }
     },
     "customerAcrResourceId": {
       "type": "string",
+      "defaultValue": "",
       "metadata": {
-        "description": "Full ARM resource ID of the customer's ACR"
+        "description": "Customer ACR resource ID (unused, retained for reference)"
+      }
+    },
+    "customerAcrUsername": {
+      "type": "string",
+      "metadata": {
+        "description": "Customer ACR admin username"
+      }
+    },
+    "customerAcrPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Customer ACR admin password"
       }
     },
     "microsoftAppId": {
@@ -176,37 +189,16 @@
   "variables": {
     "containerAppName": "[concat('ca-', parameters('agentSlug'), '-', parameters('customerSlug'))]",
     "environmentName": "[concat('env-', parameters('agentSlug'), '-', parameters('customerSlug'))]",
-    "uamiName": "[concat('id-', parameters('agentSlug'), '-', parameters('customerSlug'))]",
-    "acrPullRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
     "msAppPasswordSecretRef": "ms-app-password",
     "docIntelKeySecretRef": "doc-intel-key",
     "msClientSecretRef": "ms-client-secret",
     "redisPasswordSecretRef": "redis-password",
     "langchainKeySecretRef": "langchain-key",
     "azureOpenAiKeySecretRef": "azure-openai-key",
-    "azureBlobSasUrlSecretRef": "azure-blob-sas-url"
+    "azureBlobSasUrlSecretRef": "azure-blob-sas-url",
+    "acrPasswordSecretRef": "acr-admin-password"
   },
   "resources": [
-    {
-      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
-      "apiVersion": "2023-01-31",
-      "name": "[variables('uamiName')]",
-      "location": "[parameters('location')]"
-    },
-    {
-      "type": "Microsoft.Authorization/roleAssignments",
-      "apiVersion": "2022-04-01",
-      "name": "[guid(parameters('customerAcrResourceId'), variables('uamiName'), variables('acrPullRoleDefinitionId'))]",
-      "scope": "[format('Microsoft.ContainerRegistry/registries/{0}', last(split(parameters('customerAcrResourceId'), '/')))]",
-      "dependsOn": [
-        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('uamiName'))]"
-      ],
-      "properties": {
-        "roleDefinitionId": "[variables('acrPullRoleDefinitionId')]",
-        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('uamiName')), '2023-01-31').principalId]",
-        "principalType": "ServicePrincipal"
-      }
-    },
     {
       "type": "Microsoft.App/managedEnvironments",
       "apiVersion": "2023-05-01",
@@ -222,14 +214,10 @@
       "name": "[variables('containerAppName')]",
       "location": "[parameters('location')]",
       "identity": {
-        "type": "UserAssigned",
-        "userAssignedIdentities": {
-          "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('uamiName'))]": {}
-        }
+        "type": "SystemAssigned"
       },
       "dependsOn": [
-        "[resourceId('Microsoft.App/managedEnvironments', variables('environmentName'))]",
-        "[extensionResourceId(parameters('customerAcrResourceId'), 'Microsoft.Authorization/roleAssignments', guid(parameters('customerAcrResourceId'), variables('uamiName'), variables('acrPullRoleDefinitionId')))]"
+        "[resourceId('Microsoft.App/managedEnvironments', variables('environmentName'))]"
       ],
       "kind": "containerapps",
       "properties": {
@@ -242,7 +230,7 @@
             },
             {
               "name": "[variables('docIntelKeySecretRef')]",
-              "value": "[parameters('azureDocumentIntelKey')]"
+              "value": "[if(empty(parameters('azureDocumentIntelKey')), 'not-configured', parameters('azureDocumentIntelKey'))]"
             },
             {
               "name": "[variables('msClientSecretRef')]",
@@ -250,11 +238,11 @@
             },
             {
               "name": "[variables('redisPasswordSecretRef')]",
-              "value": "[parameters('redisPassword')]"
+              "value": "[if(empty(parameters('redisPassword')), 'not-configured', parameters('redisPassword'))]"
             },
             {
               "name": "[variables('langchainKeySecretRef')]",
-              "value": "[parameters('langchainApiKey')]"
+              "value": "[if(empty(parameters('langchainApiKey')), 'not-configured', parameters('langchainApiKey'))]"
             },
             {
               "name": "[variables('azureOpenAiKeySecretRef')]",
@@ -262,13 +250,18 @@
             },
             {
               "name": "[variables('azureBlobSasUrlSecretRef')]",
-              "value": "[parameters('azureBlobSasUrl')]"
+              "value": "[if(empty(parameters('azureBlobSasUrl')), 'not-configured', parameters('azureBlobSasUrl'))]"
+            },
+            {
+              "name": "[variables('acrPasswordSecretRef')]",
+              "value": "[parameters('customerAcrPassword')]"
             }
           ],
           "registries": [
             {
               "server": "[parameters('customerAcrLoginServer')]",
-              "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('uamiName'))]"
+              "username": "[parameters('customerAcrUsername')]",
+              "passwordSecretRef": "[variables('acrPasswordSecretRef')]"
             }
           ],
           "activeRevisionsMode": "Single",
@@ -354,7 +347,7 @@
                 },
                 {
                   "name": "GRAPH_SCOPES",
-                  "value": "Mail.ReadWrite,User.Read,People.Read,Mail.Send"
+                  "value": "Mail.ReadWrite,User.Read,Mail.Send"
                 },
                 {
                   "name": "GRAPH_URL",
@@ -642,7 +635,7 @@
     },
     "containerAppPrincipalId": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('uamiName')), '2023-01-31').principalId]"
+      "value": "[reference(resourceId('Microsoft.App/containerapps', variables('containerAppName')), '2023-05-01', 'Full').identity.principalId]"
     }
   }
 }

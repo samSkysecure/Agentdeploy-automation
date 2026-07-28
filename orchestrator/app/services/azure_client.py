@@ -65,8 +65,7 @@ class AzureDeploymentClient:
 
         # For Azure Lighthouse cross-tenant operations, we MUST authenticate against
         # Skysecure's home tenant (deployment_spn_tenant_id) where the delegated SPN identity
-        # lives. Authenticating against customer_tenant_id yields the customer's local SPN instance
-        # which does not possess the Lighthouse cross-tenant role assignments.
+        # lives.
         self.credential = ClientSecretCredential(
             tenant_id=deployment_spn_tenant_id,
             client_id=deployment_spn_client_id,
@@ -93,19 +92,92 @@ class AzureDeploymentClient:
             logger.error("Failed to create resource group %s: %s", name, exc)
             raise ArmDeploymentError(f"Failed to create resource group: {exc}")
 
+    def register_resource_providers(self) -> None:
+        """
+        Ensures all required Azure Resource Providers are registered on the customer subscription.
+        Fresh or newly created subscriptions often lack provider registrations like
+        Microsoft.ContainerRegistry, Microsoft.KeyVault, Microsoft.App, etc.
+        """
+        import time
+
+        required_providers = [
+            "Microsoft.ContainerRegistry",
+            "Microsoft.KeyVault",
+            "Microsoft.App",
+            "Microsoft.OperationalInsights",
+            "Microsoft.BotService",
+            "Microsoft.ManagedIdentity",
+        ]
+        for provider in required_providers:
+            try:
+                p_info = self.resource_client.providers.get(provider)
+                if p_info.registration_state != "Registered":
+                    logger.info("Registering resource provider '%s' on subscription %s...", provider, self.customer_subscription_id)
+                    self.resource_client.providers.register(provider)
+                    for _ in range(30):
+                        time.sleep(2)
+                        check = self.resource_client.providers.get(provider)
+                        if check.registration_state == "Registered":
+                            logger.info("Resource provider '%s' registered successfully on subscription %s.", provider, self.customer_subscription_id)
+                            break
+                else:
+                    logger.debug("Resource provider '%s' is already registered", provider)
+            except Exception as exc:
+                logger.warning("Could not verify/register resource provider '%s': %s", provider, exc)
+
     def verify_role_assignment(self, spn_object_id: str | None = None) -> bool:
         """
-        Verifies that Skysecure's deployment SPN has Contributor access on the customer subscription
-        via Azure Lighthouse delegation.
+        Verifies that the deployment SPN has access to the customer subscription.
+        Retries with delay to accommodate Entra ID/Azure ARM role propagation latency across
+        different resource providers (Microsoft.Resources, Microsoft.ContainerRegistry, Microsoft.KeyVault).
         """
-        try:
-            # Check if we can query resource groups on the customer subscription via Lighthouse
-            list(self.resource_client.resource_groups.list())
-            logger.info("Azure Lighthouse delegation verified successfully on subscription %s", self.customer_subscription_id)
-            return True
-        except Exception as exc:
-            logger.error("Failed to verify Azure Lighthouse delegation on subscription %s: %s", self.customer_subscription_id, exc)
-            return False
+        import time
+        from azure.mgmt.containerregistry import ContainerRegistryManagementClient
+        from azure.mgmt.keyvault import KeyVaultManagementClient
+
+        max_attempts = 36  # 36 * 10 seconds = 6 minutes max retry window
+        for attempt in range(max_attempts):
+            try:
+                # 1. Verify Microsoft.Resources (Resource Groups)
+                list(self.resource_client.resource_groups.list())
+
+                # 2. Verify Microsoft.ContainerRegistry
+                try:
+                    acr_client = ContainerRegistryManagementClient(self.credential, self.customer_subscription_id)
+                    list(acr_client.registries.list())
+                except Exception as e:
+                    err_str = str(e)
+                    # If the error is a tenant mismatch or authorization failure, it means the role has not propagated.
+                    # Otherwise, other errors (like provider not registered) mean authorization itself succeeded.
+                    if "InvalidAuthenticationTokenTenant" in err_str or "AuthorizationFailed" in err_str:
+                        raise e
+                    logger.debug("Container Registry auth check succeeded (but hit: %s)", err_str)
+
+                # 3. Verify Microsoft.KeyVault
+                try:
+                    kv_client = KeyVaultManagementClient(self.credential, self.customer_subscription_id)
+                    list(kv_client.vaults.list_by_subscription())
+                except Exception as e:
+                    err_str = str(e)
+                    if "InvalidAuthenticationTokenTenant" in err_str or "AuthorizationFailed" in err_str:
+                        raise e
+                    logger.debug("Key Vault auth check succeeded (but hit: %s)", err_str)
+
+                logger.info("Access verified successfully across Resource Groups, ACR, and Key Vault on subscription %s", self.customer_subscription_id)
+                return True
+            except Exception as exc:
+                err_msg = str(exc)
+                if attempt < max_attempts - 1:
+                    logger.info(
+                        "Azure role/delegation assignment not yet propagated across all providers on subscription %s (attempt %d/%d). "
+                        "Retrying in 10s... Error: %s",
+                        self.customer_subscription_id, attempt + 1, max_attempts, err_msg
+                    )
+                    time.sleep(10)
+                else:
+                    logger.error("Failed to verify access on subscription %s after %d attempts: %s", self.customer_subscription_id, max_attempts, exc)
+                    raise ArmDeploymentError(f"Azure authentication or authorization failed: {exc}") from exc
+        return False
 
     def deploy_at_resource_group_scope(
         self,

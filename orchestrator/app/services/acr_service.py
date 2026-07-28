@@ -39,6 +39,8 @@ class AcrImportResult:
     customer_acr_login_server: str
     customer_acr_resource_id: str
     image_reference: str  # e.g. customeracr.azurecr.io/docgen:v1
+    customer_acr_username: str = ""
+    customer_acr_password: str = ""
 
 
 def _sanitize_acr_name(customer_slug: str, agent_slug: str, customer_subscription_id: str) -> str:
@@ -114,16 +116,28 @@ def import_image_to_customer_acr(
             logger.info("Customer ACR '%s' already exists in %s", customer_acr_name, customer_resource_group)
         except ResourceNotFoundError:
             logger.info("Creating customer ACR '%s' in %s/%s", customer_acr_name, customer_subscription_id, customer_resource_group)
+            reg_param = acr_models.Registry(
+                location=location,
+                sku=acr_models.Sku(name="Basic"),
+            )
+            reg_param.admin_user_enabled = True
             poller = customer_acr_client.registries.begin_create(
                 resource_group_name=customer_resource_group,
                 registry_name=customer_acr_name,
-                registry=acr_models.Registry(
-                    location=location,
-                    sku=acr_models.Sku(name="Basic"),
-                    admin_user_enabled=False,
-                ),
+                registry=reg_param,
             )
             customer_registry = poller.result()
+        else:
+            # Ensure admin user is enabled on an existing registry too
+            if not customer_registry.admin_user_enabled:
+                logger.info("Enabling admin user on existing customer ACR '%s'", customer_acr_name)
+                customer_acr_client.registries.begin_update(
+                    resource_group_name=customer_resource_group,
+                    registry_name=customer_acr_name,
+                    registry_update_parameters=acr_models.RegistryUpdateParameters(
+                        admin_user_enabled=True,
+                    ),
+                ).result()
 
         customer_login_server = customer_registry.login_server
         customer_registry_id = customer_registry.id
@@ -232,10 +246,23 @@ def import_image_to_customer_acr(
 
         _wait_for_acr_dns(customer_login_server)
 
+        # Retrieve admin credentials so the Container App can pull via username/password.
+        # This avoids the AcrPull role assignment which fails under Lighthouse-delegated UAA
+        # when attempted via ARM templates or the authorization SDK.
+        logger.info("Retrieving admin credentials for customer ACR '%s'", customer_acr_name)
+        admin_creds = customer_acr_client.registries.list_credentials(
+            resource_group_name=customer_resource_group,
+            registry_name=customer_acr_name,
+        )
+        acr_username = admin_creds.username or customer_acr_name
+        acr_password = admin_creds.passwords[0].value if admin_creds.passwords else ""
+
         return AcrImportResult(
             customer_acr_login_server=customer_login_server,
             customer_acr_resource_id=customer_registry_id,
             image_reference=f"{customer_login_server}/{agent_slug}:{source_tag}",
+            customer_acr_username=acr_username,
+            customer_acr_password=acr_password,
         )
 
     except HttpResponseError as exc:

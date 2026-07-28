@@ -69,7 +69,7 @@ class DeploymentRequest(BaseModel):
 
     # --- Copilot Studio / Power Platform import (ported from onboard_customer.ps1 steps 5-7) ---
     power_platform_tenant_id: Optional[str] = Field(
-        "547b64a7-e66e-48df-a146-3e898cbcb60f", description="Tenant ID where Copilot Studio / Power Platform environment lives. Defaults to Skysecure tenant 547b64a7-e66e-48df-a146-3e898cbcb60f."
+        "", description="Tenant ID where Copilot Studio / Power Platform environment lives. Defaults to customer tenant if omitted."
     )
     environment_id: Optional[str] = Field(
         None,
@@ -127,6 +127,8 @@ class DeploymentRecord(BaseModel):
     customer_acr_login_server: Optional[str] = None
     customer_acr_resource_id: Optional[str] = None
     customer_agent_image_reference: Optional[str] = None
+    customer_acr_username: Optional[str] = None
+    customer_acr_password: Optional[str] = None  # admin credential, used only at deploy time
 
     # --- Customer-owned Key Vault (PERMANENT) ---
     keyvault_name: Optional[str] = None

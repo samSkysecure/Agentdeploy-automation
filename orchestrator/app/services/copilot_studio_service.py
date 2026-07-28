@@ -70,37 +70,66 @@ def _get_pac_cmd() -> list[str]:
     return ["pac"]
 
 
-def pac_auth_create_spn(
+def pac_auth_create_device_code(
     environment_id: str,
     tenant_id: str,
-    client_id: str,
-    client_secret: str,
     work_dir: str,
+    on_device_code: Callable[[DeviceCodeInfo], None],
 ) -> None:
     """
-    Authenticates PAC CLI non-interactively using the deployment SPN's
-    client_credentials (--applicationId / --clientSecret / --tenant).
-
-    This replaces the old device-code login (pac auth create --deviceCode)
-    so the pipeline requires zero human interaction for the PAC CLI auth step.
-
-    Requires the SPN to have 'Power Platform Administrator' or 'System Administrator'
-    role in the target environment, OR that the environment allows SPN access
-    (most Dataverse/Power Platform environments do by default).
+    Authenticates PAC CLI interactively via Device Code flow.
+    Launches 'pac auth create --deviceCode', scrapes the stdout for the URL/code,
+    reports it via the callback, and waits for the user to complete login.
     """
-    logger.info("Authenticating PAC CLI silently with SPN for environment %s", environment_id)
-    _run_pac(
-        [
-            "auth", "create",
-            "--kind", "CDS",
-            "--applicationId", client_id,
-            "--clientSecret", client_secret,
-            "--tenant", tenant_id,
-            "--environment", environment_id,
-        ],
+    import subprocess
+    import re
+    import time
+    
+    pac_exe = _get_pac_cmd()[0]
+    args = [
+        "auth", "create",
+        "--deviceCode",
+        "--tenant", tenant_id,
+        "--environment", environment_id,
+    ]
+    quoted_args = " ".join(f'"{a}"' if " " in a else a for a in args)
+    cmd_str = f'"{pac_exe}" {quoted_args}'
+    
+    logger.info("Running: pac %s (cwd=%s)", " ".join(args), work_dir)
+    
+    process = subprocess.Popen(
+        cmd_str,
         cwd=work_dir,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        shell=True,
+        bufsize=1
     )
-    logger.info("PAC CLI SPN auth succeeded for environment %s", environment_id)
+    
+    code_found = False
+    for line in iter(process.stdout.readline, ''):
+        logger.debug("PAC OUT: %s", line.strip())
+        if not code_found:
+            match = re.search(r'open the page (https://.*?) and enter the code (.*?) to authenticate', line)
+            if match:
+                uri = match.group(1).strip()
+                code = match.group(2).strip()
+                info = DeviceCodeInfo(
+                    device_code=code,
+                    user_code=code,
+                    verification_uri=uri,
+                    interval=5,
+                    expires_in=900
+                )
+                on_device_code(info)
+                code_found = True
+    
+    process.wait()
+    if process.returncode != 0:
+        raise CopilotStudioImportError(f"pac auth create --deviceCode failed with exit code {process.returncode}")
+    
+    logger.info("pac auth create --deviceCode succeeded")
 
 
 def inject_connector_host_and_repack(connector_zip_path: str, container_app_fqdn: str, work_dir: str) -> str:
@@ -111,10 +140,15 @@ def inject_connector_host_and_repack(connector_zip_path: str, container_app_fqdn
     import glob
     import shutil
 
+    # Always import connector as Unmanaged — managed solution imports don't reliably
+    # create fresh connector registrations in the Power Apps /apis endpoint when the
+    # connector has never existed in the environment before. Unmanaged imports create
+    # a proper custom API registration immediately.
+    ptype = "Unmanaged"
     unpack_dir = Path(work_dir) / "unpacked_connector_temp"
     if unpack_dir.exists():
         shutil.rmtree(str(unpack_dir), ignore_errors=True)
-    _run_pac(["solution", "unpack", "--zipfile", connector_zip_path, "--folder", str(unpack_dir)], cwd=work_dir)
+    _run_pac(["solution", "unpack", "--zipfile", connector_zip_path, "--folder", str(unpack_dir), "--packagetype", ptype], cwd=work_dir)
 
     swagger_files = glob.glob(str(unpack_dir / "**" / "*_openapidefinition.json"), recursive=True)
     if swagger_files:
@@ -126,10 +160,10 @@ def inject_connector_host_and_repack(connector_zip_path: str, container_app_fqdn
     else:
         logger.warning("Could not find swagger file to inject host - proceeding without injection.")
 
-    _bump_solution_version(unpack_dir / "solution.xml")
+    _bump_solution_version(unpack_dir)
 
     injected_zip_path = str(Path(work_dir) / "documentConnector_injected.zip")
-    _run_pac(["solution", "pack", "--zipfile", injected_zip_path, "--folder", str(unpack_dir)], cwd=work_dir)
+    _run_pac(["solution", "pack", "--zipfile", injected_zip_path, "--folder", str(unpack_dir), "--packagetype", ptype], cwd=work_dir)
     shutil.rmtree(str(unpack_dir), ignore_errors=True)
 
     if not Path(injected_zip_path).exists():
@@ -195,7 +229,7 @@ def inject_kb_sources_and_repack(solution_zip_path: str, kb_site_urls: list[str]
         )
         logger.info("Registered KB source: %s (schema: %s)", kb_url, component_schema_name)
 
-    _bump_solution_version(agent_unpack_dir / "solution.xml")
+    _bump_solution_version(agent_unpack_dir)
 
     injected_agent_zip_path = str(Path(work_dir) / "docgen_injected.zip")
     _run_pac(["solution", "pack", "--zipfile", injected_agent_zip_path, "--folder", str(agent_unpack_dir)], cwd=work_dir)
@@ -211,12 +245,22 @@ def import_connector_solution(injected_connector_zip_path: str, work_dir: str) -
     _run_pac(["solution", "import", "--path", injected_connector_zip_path, "--force-overwrite", "--activate-plugins"], cwd=work_dir)
 
 
-def _bump_solution_version(solution_xml_path: Path) -> None:
+def _bump_solution_version(folder_or_file: Path) -> None:
     """Bumps solution.xml's version to force Power Platform to pick up
     component changes on re-import - same 1.0.0.<timestamp> scheme as the
     original script."""
     import xml.etree.ElementTree as ET
     from datetime import datetime
+    import glob
+
+    if folder_or_file.is_dir():
+        files = glob.glob(str(folder_or_file / "**" / "[Ss]olution.xml"), recursive=True)
+        if not files:
+            logger.warning("Could not find Solution.xml in %s to bump version", folder_or_file)
+            return
+        solution_xml_path = Path(files[0])
+    else:
+        solution_xml_path = folder_or_file
 
     if not solution_xml_path.exists():
         return
@@ -225,7 +269,7 @@ def _bump_solution_version(solution_xml_path: Path) -> None:
     if version_el is not None:
         version_el.text = f"1.0.0.{datetime.now().strftime('%m%d%H%M')}"
         tree.write(solution_xml_path)
-        logger.info("Bumped solution version to %s", version_el.text)
+        logger.info("Bumped solution version to %s in %s", version_el.text, solution_xml_path.name)
 
 
 def start_device_code_flow(power_platform_tenant_id: str) -> DeviceCodeInfo:
@@ -287,9 +331,11 @@ def _run_pac(args: list[str], cwd: str) -> None:
     quoted_args = " ".join(f'"{a}"' if " " in a else a for a in args)
     cmd_str = f'"{pac_exe}" {quoted_args}'
     result = subprocess.run(cmd_str, cwd=cwd, capture_output=True, text=True, timeout=600, shell=True)
+    if result.stdout.strip():
+        logger.info("pac %s output:\n%s", args[0], result.stdout.strip())
     if result.returncode != 0:
         raise CopilotStudioImportError(f"pac {' '.join(args)} failed:\nstdout: {result.stdout}\nstderr: {result.stderr}")
-    logger.info("pac %s succeeded", args[0])
+    logger.info("pac %s succeeded", " ".join(args[:2]))
 
 
 def generate_settings_json(solution_zip_path: str, work_dir: str) -> dict:
@@ -328,32 +374,56 @@ def resolve_environment_guid(environment_id: str, user_token: str) -> str:
     return environment_id
 
 
-def resolve_custom_connector_api(env_guid: str, user_token: str, connector_name_pattern: str) -> str:
+def resolve_custom_connector_api(env_guid: str, user_token: str, connector_name_pattern: str, max_wait_seconds: int = 120) -> str:
+    """
+    Queries the Power Apps API list for a custom connector matching the given
+    pattern. Retries for up to max_wait_seconds (default 2 minutes) because
+    Dataverse takes 10-60+ seconds to index a newly imported connector after
+    'pac solution import' returns.
+    """
     filter_query = quote(f"environment eq '{env_guid}'")
-    resp = httpx.get(
-        f"https://api.powerapps.com/providers/Microsoft.PowerApps/apis?api-version=2020-06-01&$filter={filter_query}",
-        headers={"Authorization": f"Bearer {user_token}"},
-        timeout=30,
-    )
-    if resp.status_code != 200:
-        raise CopilotStudioImportError(f"Failed to list connectors: {resp.status_code} {resp.text}")
+    url = f"https://api.powerapps.com/providers/Microsoft.PowerApps/apis?api-version=2020-06-01&$filter={filter_query}"
+    
+    deadline = time.time() + max_wait_seconds
+    attempt = 0
+    while True:
+        attempt += 1
+        resp = httpx.get(url, headers={"Authorization": f"Bearer {user_token}"}, timeout=30)
+        if resp.status_code != 200:
+            raise CopilotStudioImportError(f"Failed to list connectors: {resp.status_code} {resp.text}")
 
-    for api in resp.json().get("value", []):
-        name = api.get("name", "")
-        if connector_name_pattern in name and "shared_" in name:
-            return name
+        apis = resp.json().get("value", [])
+        for api in apis:
+            name = api.get("name", "")
+            if connector_name_pattern in name and "shared_" in name:
+                logger.info("Found custom connector '%s' after %d attempt(s)", name, attempt)
+                return name
 
-    raise CopilotStudioImportError(
-        f"Could not find the imported custom connector matching '{connector_name_pattern}' in Dataverse. "
-        "Ensure the connector solution zip was imported successfully."
-    )
+        if time.time() >= deadline:
+            available_names = [api.get("name", "") for api in apis]
+            logger.error(
+                "Failed to find connector matching '%s' after %ds. Available custom APIs: %s",
+                connector_name_pattern, max_wait_seconds, available_names
+            )
+            raise CopilotStudioImportError(
+                f"Could not find the imported custom connector matching '{connector_name_pattern}' in Dataverse. "
+                f"Available custom APIs: {available_names}. Ensure the connector solution zip was imported successfully."
+            )
+
+        wait = min(15, deadline - time.time())
+        logger.info(
+            "Connector '%s' not yet indexed in Dataverse (attempt %d), retrying in %.0fs...",
+            connector_name_pattern, attempt, wait
+        )
+        time.sleep(wait)
 
 
 def create_connection(env_guid: str, user_token: str, api_name: str, display_name: str) -> str:
     import uuid
     conn_guid = uuid.uuid4().hex
     resp = httpx.put(
-        f"https://api.powerapps.com/providers/Microsoft.PowerApps/apis/{api_name}/connections/{conn_guid}?api-version=2020-06-01",
+        f"https://api.powerapps.com/providers/Microsoft.PowerApps/apis/{api_name}/connections/{conn_guid}"
+        f"?api-version=2020-06-01&$filter=environment%20eq%20%27{env_guid}%27",
         headers={"Authorization": f"Bearer {user_token}", "Content-Type": "application/json"},
         json={"properties": {"displayName": display_name, "environment": {"name": env_guid}}},
         timeout=30,

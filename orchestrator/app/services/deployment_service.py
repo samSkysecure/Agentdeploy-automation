@@ -30,6 +30,7 @@ from app.services.keyvault_service import (
     KeyVaultError,
     store_agent_secret_in_customer_keyvault,
     grant_secrets_user_role,
+    _grant_role_assignment_safe,
 )
 from app.services import copilot_studio_service as cs
 from app.services.copilot_studio_service import CopilotStudioImportError
@@ -59,16 +60,15 @@ def run_deployment(record: DeploymentRecord, settings: Settings) -> None:
     )
 
     try:
-        # Step 0: Confirm Azure Lighthouse delegation is active for the subscription
-        logger.info("Verifying Azure Lighthouse delegation on subscription %s", req.customer_subscription_id)
-        if not client.verify_role_assignment(req.deployment_spn_object_id_in_customer_tenant):
-            raise ArmDeploymentError(
-                f"Azure Lighthouse delegation has not been granted on subscription '{req.customer_subscription_id}'. "
-                "Please click 'Deploy to Azure' in Step 3 to deploy the Lighthouse template before retrying."
-            )
+        # Step 0: Confirm Azure access is active for the subscription
+        logger.info("Verifying Azure access on subscription %s", req.customer_subscription_id)
+        client.verify_role_assignment(req.deployment_spn_object_id_in_customer_tenant)
 
         logger.info("Ensuring Resource Group %s exists in %s", record.resource_group_name, location)
         client.create_resource_group(record.resource_group_name, location)
+
+        logger.info("Ensuring required Azure Resource Providers are registered on subscription %s", req.customer_subscription_id)
+        client.register_resource_providers()
 
         _step_create_app_registration(record, req, settings)
         _step_import_image(record, req, settings, location)
@@ -249,7 +249,7 @@ def _step_import_image(
         customer_slug=req.customer_slug,
         agent_slug=req.agent_slug,
         source_acr_name=settings.source_acr_name,
-        source_repository=req.agent_slug,
+        source_repository=settings.source_acr_repository or req.agent_slug,
         source_tag=req.agent_image_tag,
         source_acr_resource_group=settings.source_acr_resource_group or req.resource_group_name,
         source_acr_subscription_id=settings.source_acr_subscription_id or req.customer_subscription_id,
@@ -259,6 +259,8 @@ def _step_import_image(
     record.customer_acr_login_server = result.customer_acr_login_server
     record.customer_acr_resource_id = result.customer_acr_resource_id
     record.customer_agent_image_reference = result.image_reference
+    record.customer_acr_username = result.customer_acr_username
+    record.customer_acr_password = result.customer_acr_password
 
     record.steps.append(StepResult(
         step="import_image_to_customer_acr",
@@ -299,6 +301,7 @@ def _step_store_secret_in_keyvault(
         customer_slug=req.customer_slug,
         agent_slug=req.agent_slug,
         agent_app_client_secret=record.agent_app_client_secret,
+        deployment_spn_object_id=req.deployment_spn_object_id_in_customer_tenant,
     )
     record.keyvault_name = kv_result.vault_name
     record.keyvault_uri = kv_result.vault_uri
@@ -493,11 +496,10 @@ def _step_import_copilot_studio_solution(
     if not record.container_app_fqdn:
         raise CopilotStudioImportError("Cannot import Copilot Studio solution - Container App must be deployed first.")
 
-    # Power Platform / Copilot Studio lives in Skysecure's own tenant (the test/prod Copilot environment).
-    # Azure infra (Container App, ACR, Key Vault) is deployed into the customer's tenant.
-    # If a caller explicitly sets power_platform_tenant_id on the request, honour it; otherwise
-    # always default to Skysecure's management tenant - never to the customer's tenant.
-    power_platform_tenant_id = req.power_platform_tenant_id or settings.power_platform_tenant_id or settings.deployment_spn_tenant_id
+    # By default, Copilot Studio is deployed into the customer's tenant alongside the Azure infra.
+    # If a caller explicitly sets power_platform_tenant_id on the request or settings, honour it;
+    # otherwise fallback to the customer's tenant.
+    power_platform_tenant_id = req.power_platform_tenant_id or settings.power_platform_tenant_id or req.customer_tenant_id
     work_dir = tempfile.mkdtemp(prefix=f"copilot-import-{req.customer_slug}-{req.agent_slug}-")
 
     # Resolve zip paths to absolute so PAC CLI finds them regardless of cwd (temp dir)
@@ -538,6 +540,9 @@ def _step_import_copilot_studio_solution(
         "verification_uri": device_code_info.verification_uri,
         "purpose": "user_token",
     }
+    # Flush to store so frontend shows the popup while we block on polling below
+    from app.services.deployment_store import store as _store
+    _store.save(record)
     user_token = cs.poll_for_user_token(device_code_info, power_platform_tenant_id)
     record.device_code_info = None
 
@@ -551,15 +556,29 @@ def _step_import_copilot_studio_solution(
     record.power_platform_environment_guid = env_guid
     record.status = DeploymentStatus.IMPORTING_COPILOT_SOLUTION
 
-    # --- Step 5: Authenticate PAC CLI silently using the deployment SPN.
-    # Now that we know the environment URL, PAC CLI auth targets the correct environment.
-    cs.pac_auth_create_spn(
+    # --- Step 5: Authenticate PAC CLI interactively via Device Code.
+    # Microsoft Power Platform blocks Service Principals from importing Custom Connectors
+    # unless they are explicitly assigned the System Administrator role in the environment.
+    # By using the user's Global Admin account here, we bypass that limitation and fully
+    # automate the import process!
+    def _on_pac_device_code(info: cs.DeviceCodeInfo):
+        from app.services.deployment_store import store
+        record.status = DeploymentStatus.AWAITING_USER_DEVICE_AUTH
+        record.device_code_info = {
+            "user_code": info.user_code,
+            "verification_uri": info.verification_uri,
+            "purpose": "pac_auth",
+        }
+        # Force a state flush so the frontend picks it up immediately while the subprocess blocks
+        store.save(record)
+
+    cs.pac_auth_create_device_code(
         environment_id=selected_instance_url,
         tenant_id=power_platform_tenant_id,
-        client_id=settings.deployment_spn_client_id,
-        client_secret=settings.deployment_spn_secret,
         work_dir=work_dir,
+        on_device_code=_on_pac_device_code,
     )
+    record.device_code_info = None
 
     cs.import_connector_solution(injected_connector_zip, work_dir=work_dir)
 
@@ -572,7 +591,12 @@ def _step_import_copilot_studio_solution(
 
     settings_json = cs.generate_settings_json(injected_solution_zip, work_dir=work_dir)
 
-    connector_api_name = cs.resolve_custom_connector_api(env_guid, user_token, connector_name_pattern="docgen-20sharepoint-20connector")
+    connector_pattern = (
+        "docgen-20sharepoint-20connector"
+        if req.agent_slug == "teamsagent"
+        else "openapi-5fdocgen-5fagent"
+    )
+    connector_api_name = cs.resolve_custom_connector_api(env_guid, user_token, connector_name_pattern=connector_pattern)
     custom_connection_id = cs.create_connection(env_guid, user_token, connector_api_name, "DocGen Custom Connector")
     copilot_connection_id = cs.create_connection(env_guid, user_token, "shared_microsoftcopilotstudio", "Microsoft Copilot Studio Connection")
 
@@ -585,7 +609,9 @@ def _step_import_copilot_studio_solution(
     )
 
     # --- Step 6: fetch the flow's webhook URL, patch it into the Container App ---
-    flow_webhook_url = cs.fetch_flow_webhook_url(env_guid, user_token, flow_name_pattern="docgen flow")
+    flow_webhook_url = None
+    if req.agent_slug == "teamsagent":
+        flow_webhook_url = cs.fetch_flow_webhook_url(env_guid, user_token, flow_name_pattern="docgen flow")
     record.copilot_flow_webhook_url = flow_webhook_url
 
     client = AzureDeploymentClient(
@@ -667,11 +693,13 @@ def _step_deploy_container_app(
         "fileDownloadBaseUrl": settings.FILE_DOWNLOAD_BASE_URL,
         "azureStorageContainerName": settings.AZURE_STORAGE_CONTAINER_NAME,
         "azureBlobSasUrl": settings.AZURE_STORAGE_SAS_URL,
+        "customerAcrUsername": record.customer_acr_username or "",
+        "customerAcrPassword": record.customer_acr_password or "",
     }
 
     from pathlib import Path
-
     arm_dir = Path(settings.arm_templates_dir)
+
     if (arm_dir / req.agent_slug / "containerapp.json").exists():
         containerapp_template = f"{req.agent_slug}/containerapp.json"
     elif (arm_dir / f"{req.agent_slug}-containerapp.json").exists():
@@ -751,6 +779,11 @@ def _step_generate_manifest(
 ) -> None:
     record.status = DeploymentStatus.GENERATING_MANIFEST
 
+    import os
+    resources_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources")
+    color_path = os.path.join(resources_dir, "color.png")
+    outline_path = os.path.join(resources_dir, "outline.png")
+
     zip_bytes, teams_app_id = generate_and_zip_manifest(
         bot_id=record.agent_app_client_id,
         container_app_fqdn=record.container_app_fqdn,
@@ -758,6 +791,8 @@ def _step_generate_manifest(
         customer_slug=req.customer_slug,
         settings=settings,
         teams_app_id=req.teams_app_id,
+        color_icon_path=color_path,
+        outline_icon_path=outline_path,
     )
 
     output_dir = Path(settings.manifest_output_dir)
@@ -786,23 +821,71 @@ def _step_publish_manifest_to_catalog(
 ) -> None:
     """
     Publishes the manifest zip generated in _step_generate_manifest to the
-    customer tenant's Teams app catalog via Graph. Runs after Copilot Studio
-    import (so the bot is live) and BEFORE the deployment SPN is torn down,
-    since publishing needs the SPN's access to the customer tenant.
+    customer tenant's Teams app catalog via Graph.
+
+    POST /appCatalogs/teamsApps only accepts DELEGATED tokens (Application
+    permissions always return 403). We therefore:
+      1. Create a temporary PUBLIC-client App Registration in the customer
+         tenant (isFallbackPublicClient=True → no client_secret needed in poll).
+      2. Pre-grant admin consent for AppCatalog.ReadWrite.All delegated.
+      3. Run device-code flow with that public client.
+      4. Upload the manifest zip.
+      5. Delete the temporary app (cleanup).
     """
     if not record.manifest_zip_path:
         raise CatalogPublishError("Cannot publish manifest - no manifest_zip_path on the deployment record.")
 
-    record.status = DeploymentStatus.PUBLISHING_MANIFEST
+    import app.services.catalog_publish_service as cps
+    from app.services.deployment_store import store as _store
 
-    zip_bytes = Path(record.manifest_zip_path).read_bytes()
-
-    app_data = publish_manifest(
-        zip_bytes=zip_bytes,
+    # --- Step 1: create temp public-client app in the customer tenant -------
+    record.status = DeploymentStatus.AWAITING_USER_DEVICE_AUTH
+    _store.save(record)
+    app_object_id, public_client_id = cps.create_temp_manifest_app(
         deployment_spn_client_id=settings.deployment_spn_client_id,
         deployment_spn_secret=settings.deployment_spn_secret,
         customer_tenant_id=req.customer_tenant_id,
     )
+
+    try:
+        # --- Step 2: start device-code flow (public client, no secret) ------
+        device_code_info = cps.start_device_code_flow_for_graph(
+            client_id=public_client_id,
+            tenant_id=req.customer_tenant_id,
+        )
+        record.device_code_info = {
+            "user_code": device_code_info["user_code"],
+            "verification_uri": device_code_info["verification_uri"],
+            "purpose": "graph_auth",
+        }
+        _store.save(record)
+
+        try:
+            # Public client → no client_secret in poll → no AADSTS7000218
+            token = cps.poll_for_graph_token(
+                device_code_info=device_code_info,
+                client_id=public_client_id,
+                tenant_id=req.customer_tenant_id,
+            )
+        finally:
+            record.device_code_info = None
+            _store.save(record)
+
+        # --- Step 3: upload manifest ----------------------------------------
+        record.status = DeploymentStatus.PUBLISHING_MANIFEST
+        _store.save(record)
+
+        zip_bytes = Path(record.manifest_zip_path).read_bytes()
+        app_data = cps.publish_manifest(zip_bytes=zip_bytes, token=token)
+
+    finally:
+        # --- Step 4: clean up temp app regardless of success/failure --------
+        cps.delete_temp_manifest_app(
+            deployment_spn_client_id=settings.deployment_spn_client_id,
+            deployment_spn_secret=settings.deployment_spn_secret,
+            customer_tenant_id=req.customer_tenant_id,
+            app_object_id=app_object_id,
+        )
 
     record.catalog_teams_app_id = app_data.get("id")
     record.steps.append(StepResult(

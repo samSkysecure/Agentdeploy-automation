@@ -386,9 +386,9 @@ async def start_power_platform_device_code(req: PowerPlatformDeviceCodeRequest):
     """
     Initiates a delegated device-code flow against Microsoft Entra for Power Platform.
     Uses the well-known PAC CLI client ID (1950a258-227b-4e31-a9cf-717495945fc2).
-    Defaults to Skysecure's Power Platform tenant (547b64a7-e66e-48df-a146-3e898cbcb60f).
+    Defaults to settings.power_platform_tenant_id if not provided.
     """
-    target_tenant_id = settings.power_platform_tenant_id or "547b64a7-e66e-48df-a146-3e898cbcb60f"
+    target_tenant_id = settings.power_platform_tenant_id or ""
 
     url = f"https://login.microsoftonline.com/{target_tenant_id}/oauth2/v2.0/devicecode"
     data = {
@@ -429,7 +429,7 @@ async def poll_power_platform_device_token(req: PowerPlatformDeviceTokenRequest)
     if not req.device_code:
         raise HTTPException(status_code=400, detail="device_code is required")
 
-    target_tenant_id = settings.power_platform_tenant_id or "547b64a7-e66e-48df-a146-3e898cbcb60f"
+    target_tenant_id = settings.power_platform_tenant_id or ""
 
     url = f"https://login.microsoftonline.com/{target_tenant_id}/oauth2/v2.0/token"
     data = {
