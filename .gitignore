@@ -48,3 +48,10 @@ Desktop.ini
 # Tooling / Agent metadata
 .antigravity/
 .gemini/
+
+# Standalone test / generator scripts & static assets
+manifestgen.py
+test_sharepoint.py
+app/static/
+static/
+

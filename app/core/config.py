@@ -28,11 +28,8 @@ def _resolve_env_files() -> tuple[str, ...]:
     
     candidates.extend([
         f".env.{agent_slug}",
-        f"../.env.{agent_slug}",
         ".env.docgenhybrid",
-        "../.env.docgenhybrid",
         ".env",
-        "../.env",
     ])
 
     seen = set()

@@ -21,13 +21,7 @@ router = APIRouter()
 
 @router.get("/api/manifest/{agent_slug}/{customer_slug}")
 def download_manifest(agent_slug: str, customer_slug: str):
-    # Determine the path based on the orchestrator's directory structure
-    cwd = os.path.abspath(os.path.join(os.getcwd(), ".."))
-    manifest_dir = os.path.join(cwd, "orchestrator", "generated_manifests")
-
-    # If the orchestrator is running directly from the orchestrator directory
-    if not os.path.exists(manifest_dir):
-        manifest_dir = os.path.join(os.getcwd(), "generated_manifests")
+    manifest_dir = os.path.abspath(os.path.join(os.getcwd(), "generated_manifests"))
 
     file_path = os.path.join(manifest_dir, f"{agent_slug}-{customer_slug}-manifest.zip")
 
