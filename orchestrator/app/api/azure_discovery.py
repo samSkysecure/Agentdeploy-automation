@@ -163,11 +163,11 @@ async def get_assign_role_link(
     # Both docgenhybrid and teamsagent use the same delegation template so we
     # use docgenhybrid as the canonical source (they are identical).
     TEMPLATE_RAW_URL = (
-        "https://raw.githubusercontent.com/samSkysecure/Agentdeploy-automation/main"
+        "https://raw.githubusercontent.com/samSkysecure/Agentdeploy-automation/powerplat"
         "/orchestrator/arm-templates/docgenhybrid/lighthouse-delegation.json"
     )
     TEMPLATE_RAW_URL_ENCODED = (
-        "https%3A%2F%2Fraw.githubusercontent.com%2FsamSkysecure%2FAgentdeploy-automation%2Fmain"
+        "https%3A%2F%2Fraw.githubusercontent.com%2FsamSkysecure%2FAgentdeploy-automation%2Fpowerplat"
         "%2Forchestrator%2Farm-templates%2Fdocgenhybrid%2Flighthouse-delegation.json"
     )
 

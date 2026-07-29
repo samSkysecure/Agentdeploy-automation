@@ -534,9 +534,10 @@ def create_pp_environment(
         "properties": {
             "displayName": display_name.strip(),
             "environmentSku": sku,
-            "databaseCreationProperties": {
+            "databaseType": "CommonDataService",
+            "linkedEnvironmentMetadata": {
+                "baseLanguage": language_code,
                 "currency": {"code": currency},
-                "language": {"code": language_code},
             },
         },
     }
